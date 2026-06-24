@@ -1,0 +1,56 @@
+{
+  "dxc": {
+    "name": "dxc",
+    "displayName": "DirectX Shader Compiler",
+    "kind": "github-release",
+    "repo": "microsoft/DirectXShaderCompiler",
+    "version": "latest-stable",
+    "assetPattern": "(?i)((dxc|DirectXShaderCompiler).*(win|windows|x64).*\\.zip$|dxc_.*\\.zip$)",
+    "commands": ["dxc"],
+    "binHints": ["bin\\x64", "bin", ""],
+    "notes": "Installs Microsoft DirectX Shader Compiler for HLSL/DXIL shader builds."
+  },
+  "cmake": {
+    "name": "cmake",
+    "displayName": "CMake",
+    "kind": "github-release",
+    "repo": "Kitware/CMake",
+    "version": "latest-stable",
+    "assetPattern": "(?i)cmake-.*-windows-x86_64\\.zip$",
+    "commands": ["cmake", "ctest", "cpack"],
+    "binHints": ["bin", ""],
+    "notes": "Portable CMake build system generator for Windows x64."
+  },
+  "ninja": {
+    "name": "ninja",
+    "displayName": "Ninja Build",
+    "kind": "github-release",
+    "repo": "ninja-build/ninja",
+    "version": "latest-stable",
+    "assetPattern": "(?i)ninja-win\\.zip$",
+    "commands": ["ninja"],
+    "binHints": ["", "bin"],
+    "notes": "Fast parallel build system, commonly used with CMake."
+  },
+  "glslang": {
+    "name": "glslang",
+    "displayName": "glslangValidator",
+    "kind": "manual",
+    "commands": ["glslangValidator"],
+    "notes": "Install the Vulkan SDK or place glslangValidator in PATH. Portable Vulkan SDK support is not automated yet."
+  },
+  "renderdoc": {
+    "name": "renderdoc",
+    "displayName": "RenderDoc",
+    "kind": "manual",
+    "commands": ["renderdoccmd"],
+    "notes": "Install RenderDoc from https://renderdoc.org/ for GPU frame debugging."
+  },
+  "sdl_shadercross": {
+    "name": "sdl_shadercross",
+    "displayName": "SDL_shadercross",
+    "kind": "manual",
+    "commands": ["SDL_shadercross", "shadercross"],
+    "notes": "SDL_shadercross has a CLI and runtime library, but CDo does not yet automate building its portable binary."
+  }
+}

@@ -1,0 +1,28 @@
+# Build outputs
+build/
+out/
+dist/
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+
+# cdo caches and portable tools
+.cdo/cache/
+.cdo/tools/
+
+# Dependency archives, but not vendored dependency source/binaries
+third_party/**/*.zip
+third_party/**/*.tar
+third_party/**/*.tar.gz
+third_party/**/*.tgz
+third_party/**/*.tar.bz2
+third_party/**/*.tbz2
+
+# Editors and local state
+.vs/
+*.user
+*.suo
+.DS_Store
