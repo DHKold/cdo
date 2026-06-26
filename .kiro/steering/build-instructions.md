@@ -2,22 +2,22 @@
 
 ## Primary Build Method: `cdo.exe`
 
-Always use the CDo build tool itself to compile the project:
+Always use the CDo build tool itself to compile the project. Use the cdo.exe at the project's root (not the one in the build folder).
 
 ```
-cdo.exe build
+.\cdo.exe build
 ```
 
 To build a specific crate:
 
 ```
-cdo.exe build cdo
+.\cdo.exe build cdo
 ```
 
 To build and run tests:
 
 ```
-cdo.exe build cdo_pbt
+.\cdo.exe build cdo_pbt
 .\build\release\cdo_pbt\cdo_pbt.exe
 ```
 
@@ -26,6 +26,11 @@ Useful flags:
 - `--verbose` or `-v` — show DEBUG-level output for troubleshooting
 - `--quiet` or `-q` — suppress everything except errors
 - `--release` or `-r` — build with optimizations
+
+## Testing a built cdo
+
+Don't run the `cdo.exe`from the build folder as it may try to compile and write itself, failing due to the file being used.
+If you need to test a build, first copy the cdo.exe as `./cdo_temp.exe`
 
 ## Fallback Only: `build.ps1`
 

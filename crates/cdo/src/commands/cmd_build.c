@@ -698,13 +698,43 @@ int cmd_build(const CdoOptions* opts) {
             continue;
         }
 
-        // Use compilable_indices as our "dirty" set (full rebuild for now)
-        int* dirty_indices = compilable_indices;
-        int dirty_count = compilable_src_count;
+        // Compute dirty set: only rebuild files where the object is missing or older than source
+        int* dirty_indices = (int*)malloc(sizeof(int) * compilable_src_count);
+        int dirty_count = 0;
+        if (!dirty_indices) {
+            free(compilable_indices);
+            filelist_free(&sources);
+            failed = 1;
+            break;
+        }
+
+        for (int ci = 0; ci < compilable_src_count; ci++) {
+            int src_idx = compilable_indices[ci];
+            const char* src_path = sources.paths[src_idx];
+
+            char obj_path[260];
+            object_path_from_source(src_path, build_dir, obj_path, sizeof(obj_path));
+
+            uint64_t src_mtime = 0, obj_mtime = 0;
+            bool needs_rebuild = true;
+
+            if (pal_file_mtime(src_path, &src_mtime) == 0 &&
+                pal_file_mtime(obj_path, &obj_mtime) == 0) {
+                // Object exists and we have both mtimes
+                if (obj_mtime >= src_mtime) {
+                    needs_rebuild = false;
+                }
+            }
+
+            if (needs_rebuild) {
+                dirty_indices[dirty_count++] = src_idx;
+            }
+        }
+        free(compilable_indices);
 
         if (dirty_count == 0) {
             cdo_info("crate '%s' is up to date", crate->name);
-            completed_units += sources.count;
+            completed_units += compilable_src_count;
             progress_update(progress, completed_units);
             filelist_free(&sources);
             free(dirty_indices);
@@ -846,7 +876,7 @@ int cmd_build(const CdoOptions* opts) {
             break;
         }
 
-        completed_units += sources.count;
+        completed_units += compilable_src_count;
         progress_update(progress, completed_units);
 
         // 5f: Link — collect object files from compilable sources only
