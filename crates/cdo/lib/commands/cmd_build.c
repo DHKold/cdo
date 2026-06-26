@@ -2397,37 +2397,27 @@ int cmd_build(const CdoOptions* opts) {
         const char* dep_link_libs[128] = {0};
         int dep_link_lib_count = 0;
 
-        // Internal crate dependencies: add their include paths
+        // Internal crate dependencies: add their include paths and link info
         for (int d = 0; d < crate->dep_count; d++) {
             int dep_idx = crate->dep_indices[d];
             Crate* dep_crate = &ws.crates[dep_idx];
 
-            // Include the dependency crate's include/ and src/ directories
             static char dep_inc_buf[64][260];
-            char dep_path[260];
-            pal_path_join(dep_path, sizeof(dep_path), ws.root_path, dep_crate->path);
 
-            char inc_path[260];
-            pal_path_join(inc_path, sizeof(inc_path), dep_path, "include");
-            if (pal_path_exists(inc_path) == 0) {
-                strncpy(dep_inc_buf[dep_include_count], inc_path, 259);
+            // Include resolution: use api/ as public headers
+            if (dep_crate->has_api && dep_crate->modules[MODULE_API].dir_path[0] != '\0'
+                && dep_include_count < 64) {
+                strncpy(dep_inc_buf[dep_include_count],
+                        dep_crate->modules[MODULE_API].dir_path, 259);
                 dep_include_paths[dep_include_count] = dep_inc_buf[dep_include_count];
                 dep_include_count++;
             }
 
-            // Also add the dependency's src/ directory for header access
-            char dep_src_path[260];
-            pal_path_join(dep_src_path, sizeof(dep_src_path), dep_path, "src");
-            if (pal_path_exists(dep_src_path) == 0 && dep_include_count < 64) {
-                strncpy(dep_inc_buf[dep_include_count], dep_src_path, 259);
-                dep_include_paths[dep_include_count] = dep_inc_buf[dep_include_count];
-                dep_include_count++;
-            }
+            // Link against dependency's library artifact
+            if (dep_crate->has_lib) {
+                char dep_build_dir[260];
+                build_dir_for_crate(&ws, dep_crate, profile, dep_build_dir, sizeof(dep_build_dir));
 
-            // Also add the dependency's build dir for linked artifacts
-            char dep_build_dir[260];
-            build_dir_for_crate(&ws, dep_crate, profile, dep_build_dir, sizeof(dep_build_dir));
-            if (dep_crate->type == CRATE_STATIC_LIB || dep_crate->type == CRATE_SHARED_LIB) {
                 static char dep_lib_buf[64][260];
                 strncpy(dep_lib_buf[dep_lib_count], dep_build_dir, 259);
                 dep_lib_paths[dep_lib_count] = dep_lib_buf[dep_lib_count];
@@ -2459,23 +2449,22 @@ int cmd_build(const CdoOptions* opts) {
                 if (dep_idx < 0 || dep_idx >= ws.crate_count) continue;
                 Crate* dep_crate = &ws.crates[dep_idx];
 
-                // Include the dev-dependency crate's include/ directory
                 static char dev_dep_inc_buf[64][260];
-                char dep_path[260];
-                pal_path_join(dep_path, sizeof(dep_path), ws.root_path, dep_crate->path);
 
-                char inc_path[260];
-                pal_path_join(inc_path, sizeof(inc_path), dep_path, "include");
-                if (pal_path_exists(inc_path) == 0 && dep_include_count < 64) {
-                    strncpy(dev_dep_inc_buf[dep_include_count], inc_path, 259);
+                // Include resolution: use api/ as public headers
+                if (dep_crate->has_api && dep_crate->modules[MODULE_API].dir_path[0] != '\0'
+                    && dep_include_count < 64) {
+                    strncpy(dev_dep_inc_buf[dep_include_count],
+                            dep_crate->modules[MODULE_API].dir_path, 259);
                     dep_include_paths[dep_include_count] = dev_dep_inc_buf[dep_include_count];
                     dep_include_count++;
                 }
 
-                // Also add the dev-dependency's build dir for linked artifacts
-                char dep_build_dir[260];
-                build_dir_for_crate(&ws, dep_crate, profile, dep_build_dir, sizeof(dep_build_dir));
-                if (dep_crate->type == CRATE_STATIC_LIB || dep_crate->type == CRATE_SHARED_LIB) {
+                // Link against dev-dependency's library artifact
+                if (dep_crate->has_lib) {
+                    char dep_build_dir[260];
+                    build_dir_for_crate(&ws, dep_crate, profile, dep_build_dir, sizeof(dep_build_dir));
+
                     static char dev_dep_lib_buf[64][260];
                     if (dep_lib_count < 64) {
                         strncpy(dev_dep_lib_buf[dep_lib_count], dep_build_dir, 259);
@@ -2881,15 +2870,22 @@ int cmd_build(const CdoOptions* opts) {
             for (int l = 0; l < dep_link_lib_count && all_link_lib_count < 192; l++) {
                 all_link_libs[all_link_lib_count++] = dep_link_libs[l];
             }
-            // For test crates, also inherit link_libs from executable dependencies
-            if (crate->type == CRATE_TEST) {
-                for (int d = 0; d < crate->dep_count; d++) {
-                    int dep_idx = crate->dep_indices[d];
-                    Crate* dep_crate = &ws.crates[dep_idx];
-                    if (dep_crate->type == CRATE_EXECUTABLE) {
-                        for (int l = 0; l < dep_crate->link_lib_count && all_link_lib_count < 192; l++) {
-                            all_link_libs[all_link_lib_count++] = dep_crate->link_libs[l];
-                        }
+            // Inherit link_libs from dependency crates:
+            // - For all crates: inherit from module-based dependencies (they expose
+            //   their link_libs transitively since the dep links against their .lib)
+            for (int d = 0; d < crate->dep_count; d++) {
+                int dep_idx = crate->dep_indices[d];
+                Crate* dep_crate = &ws.crates[dep_idx];
+
+                bool should_inherit = false;
+                if (dep_crate->module_count > 0 && dep_crate->has_lib) {
+                    // Module-based dep: always inherit link_libs
+                    should_inherit = true;
+                }
+
+                if (should_inherit) {
+                    for (int l = 0; l < dep_crate->link_lib_count && all_link_lib_count < 192; l++) {
+                        all_link_libs[all_link_lib_count++] = dep_crate->link_libs[l];
                     }
                 }
             }

@@ -6,6 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+
 // --- Public API ---
 
 const char* module_kind_to_string(ModuleKind kind) {
@@ -125,17 +132,28 @@ int module_include_paths(const Crate* crate, ModuleKind kind,
                          const struct Workspace* ws, char*** paths, int* count) {
     if (!crate || !paths || !count) return 1;
 
-    // Maximum possible paths:
-    // 1 (own dir) + 1 (lib/) + 1 (api/) + dep_count (inter-crate)
-    int max_paths = 3 + crate->dep_count;
+    // We may have many paths: root dirs + subdirectories of lib/ and api/ + deps.
+    // Start with a generous initial allocation.
+    int max_paths = 32 + crate->dep_count;
     char** result = (char**)malloc(max_paths * sizeof(char*));
     if (!result) return 1;
 
     int n = 0;
 
+    // Helper: grow result array if needed
+    #define GROW_IF_NEEDED() do { \
+        if (n >= max_paths) { \
+            char** grown = (char**)realloc(result, (max_paths * 2) * sizeof(char*)); \
+            if (!grown) goto fail; \
+            result = grown; \
+            max_paths *= 2; \
+        } \
+    } while(0)
+
     // 1. Always add the module's own directory first
     const Module* self_mod = &crate->modules[kind];
     if (self_mod->present && self_mod->dir_path[0] != '\0') {
+        GROW_IF_NEEDED();
         result[n] = strdup(self_mod->dir_path);
         if (!result[n]) goto fail;
         n++;
@@ -145,43 +163,131 @@ int module_include_paths(const Crate* crate, ModuleKind kind,
     if (kind != MODULE_LIB && crate->has_lib) {
         const Module* lib_mod = &crate->modules[MODULE_LIB];
         if (lib_mod->dir_path[0] != '\0') {
+            GROW_IF_NEEDED();
             result[n] = strdup(lib_mod->dir_path);
             if (!result[n]) goto fail;
             n++;
         }
     }
 
-    // 3. If api/ is present, add api/ directory; otherwise fallback to include/
+    // 3. If api/ is present, add api/ directory
     if (crate->has_api) {
         const Module* api_mod = &crate->modules[MODULE_API];
         if (api_mod->dir_path[0] != '\0') {
+            GROW_IF_NEEDED();
             result[n] = strdup(api_mod->dir_path);
             if (!result[n]) goto fail;
             n++;
         }
-    } else if (ws) {
-        // Intra-crate fallback: if no api/ but include/ exists, use it (Req 6.3)
-        char crate_abs[260];
-        if (pal_path_join(crate_abs, sizeof(crate_abs),
-                          ws->root_path, crate->path) == 0) {
-            char include_path[260];
-            if (pal_path_join(include_path, sizeof(include_path),
-                              crate_abs, "include") == 0) {
-                if (pal_path_exists(include_path) == 0) {
-                    char** grown = (char**)realloc(result, (max_paths + 1) * sizeof(char*));
-                    if (!grown) goto fail;
-                    result = grown;
-                    max_paths++;
+    }
 
-                    result[n] = strdup(include_path);
-                    if (!result[n]) goto fail;
-                    n++;
+    // 3b. Add immediate subdirectories of api/ and lib/ as include paths.
+    // This allows source files to use bare #include "header.h" for headers
+    // in sibling subdirectories (matching the behavior of the old -Isrc/ layout
+    // where GCC's same-directory lookup found co-located headers).
+    {
+        const char* dirs_to_scan[2] = {NULL, NULL};
+        int dir_count = 0;
+
+        if (crate->has_api && crate->modules[MODULE_API].dir_path[0] != '\0') {
+            dirs_to_scan[dir_count++] = crate->modules[MODULE_API].dir_path;
+        }
+        if (crate->has_lib && crate->modules[MODULE_LIB].dir_path[0] != '\0') {
+            dirs_to_scan[dir_count++] = crate->modules[MODULE_LIB].dir_path;
+        }
+
+        for (int di = 0; di < dir_count; di++) {
+            const char* parent_dir = dirs_to_scan[di];
+
+            // Use pal_dir_walk to find immediate subdirectories
+            // We collect them via a simple callback structure
+            typedef struct {
+                char** result;
+                int* n;
+                int* max_paths;
+                const char* parent;
+                size_t parent_len;
+                int error;
+            } SubdirCtx;
+
+            // Can't use pal_dir_walk inline with a local struct easily in C89/C11.
+            // Instead, enumerate using Windows FindFirstFile / POSIX opendir.
+            // Use a simpler approach: manually check for known subdirectory names
+            // by walking with pal_dir_walk and filtering for direct children.
+            //
+            // Actually, the simplest correct approach: use pal_dir_walk and pick
+            // entries that are directories AND are direct children (depth 1).
+            // We detect depth 1 by checking that the path after parent_dir has
+            // no additional separators.
+
+            size_t plen = strlen(parent_dir);
+            // Normalize trailing slash
+            char norm_parent[260];
+            strncpy(norm_parent, parent_dir, sizeof(norm_parent) - 1);
+            norm_parent[sizeof(norm_parent) - 1] = '\0';
+            size_t nplen = strlen(norm_parent);
+            if (nplen > 0 && norm_parent[nplen-1] != '/' && norm_parent[nplen-1] != '\\') {
+                if (nplen < sizeof(norm_parent) - 1) {
+                    norm_parent[nplen] = '/';
+                    norm_parent[nplen+1] = '\0';
+                    nplen++;
                 }
             }
+
+            // Walk and collect direct child directories
+            // Since pal_dir_walk is recursive and uses a callback, we need a static/heap context.
+            // For simplicity and to avoid complex callback machinery, use a platform-specific
+            // approach to list just the immediate children.
+#ifdef _WIN32
+            {
+                char pattern[260];
+                snprintf(pattern, sizeof(pattern), "%s*", norm_parent);
+                WIN32_FIND_DATAA fd;
+                HANDLE hFind = FindFirstFileA(pattern, &fd);
+                if (hFind != INVALID_HANDLE_VALUE) {
+                    do {
+                        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                            strcmp(fd.cFileName, ".") != 0 &&
+                            strcmp(fd.cFileName, "..") != 0) {
+                            char subdir[260];
+                            snprintf(subdir, sizeof(subdir), "%s%s", norm_parent, fd.cFileName);
+
+                            GROW_IF_NEEDED();
+                            result[n] = strdup(subdir);
+                            if (!result[n]) goto fail;
+                            n++;
+                        }
+                    } while (FindNextFileA(hFind, &fd));
+                    FindClose(hFind);
+                }
+            }
+#else
+            {
+                DIR* dir = opendir(norm_parent);
+                if (dir) {
+                    struct dirent* entry;
+                    while ((entry = readdir(dir)) != NULL) {
+                        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                            continue;
+                        char subdir[260];
+                        snprintf(subdir, sizeof(subdir), "%s%s", norm_parent, entry->d_name);
+                        // Check if it's a directory
+                        struct stat st;
+                        if (stat(subdir, &st) == 0 && S_ISDIR(st.st_mode)) {
+                            GROW_IF_NEEDED();
+                            result[n] = strdup(subdir);
+                            if (!result[n]) goto fail;
+                            n++;
+                        }
+                    }
+                    closedir(dir);
+                }
+            }
+#endif
         }
     }
 
-    // 4. Inter-crate dependencies: add target crate's api/ or fallback to include/
+    // 4. Inter-crate dependencies: add target crate's api/ or fallback to lib/
     if (ws) {
         for (int i = 0; i < crate->dep_count; i++) {
             int dep_idx = crate->dep_indices[i];
@@ -190,44 +296,27 @@ int module_include_paths(const Crate* crate, ModuleKind kind,
             const Crate* dep = &ws->crates[dep_idx];
 
             if (dep->has_api) {
-                // Use the dep crate's api/ directory
                 const Module* dep_api = &dep->modules[MODULE_API];
                 if (dep_api->dir_path[0] != '\0') {
-                    // Grow result array if needed
-                    char** grown = (char**)realloc(result, (max_paths + 1) * sizeof(char*));
-                    if (!grown) goto fail;
-                    result = grown;
-                    max_paths++;
-
+                    GROW_IF_NEEDED();
                     result[n] = strdup(dep_api->dir_path);
                     if (!result[n]) goto fail;
                     n++;
                 }
-            } else {
-                // Fallback: check for include/ directory in dep crate's path.
-                // dep->path is relative to workspace root, so we must resolve
-                // it to an absolute path first (Req 6.3).
-                char dep_abs[260];
-                if (pal_path_join(dep_abs, sizeof(dep_abs),
-                                  ws->root_path, dep->path) == 0) {
-                    char include_path[260];
-                    if (pal_path_join(include_path, sizeof(include_path),
-                                      dep_abs, "include") == 0) {
-                        if (pal_path_exists(include_path) == 0) {
-                            char** grown = (char**)realloc(result, (max_paths + 1) * sizeof(char*));
-                            if (!grown) goto fail;
-                            result = grown;
-                            max_paths++;
-
-                            result[n] = strdup(include_path);
-                            if (!result[n]) goto fail;
-                            n++;
-                        }
-                    }
+            } else if (dep->has_lib) {
+                // No api/ — fallback to lib/ for header access
+                const Module* dep_lib = &dep->modules[MODULE_LIB];
+                if (dep_lib->dir_path[0] != '\0') {
+                    GROW_IF_NEEDED();
+                    result[n] = strdup(dep_lib->dir_path);
+                    if (!result[n]) goto fail;
+                    n++;
                 }
             }
         }
     }
+
+    #undef GROW_IF_NEEDED
 
     *paths = result;
     *count = n;

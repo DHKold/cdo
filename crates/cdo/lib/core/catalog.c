@@ -2,11 +2,11 @@
  * catalog.c — Catalog registry: platform detection, TOML loading, and resolution.
  */
 
-#include "catalog.h"
-#include "output.h"
-#include "semver.h"
-#include "toml.h"
-#include "../pal/pal.h"
+#include "core/catalog.h"
+#include "core/output.h"
+#include "core/semver.h"
+#include "core/toml.h"
+#include "pal/pal.h"
 
 #include <ctype.h>
 #include <stdio.h>

@@ -1,4 +1,4 @@
-﻿#include "core/archive.h"
+#include "core/archive.h"
 #include "pal/pal.h"
 #include "core/output.h"
 #include <stdint.h>

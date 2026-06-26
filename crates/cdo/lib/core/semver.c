@@ -1,4 +1,4 @@
-#include "semver.h"
+#include "core/semver.h"
 
 #include <stdlib.h>
 #include <string.h>

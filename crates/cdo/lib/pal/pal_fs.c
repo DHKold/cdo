@@ -1,4 +1,4 @@
-#include "pal.h"
+#include "pal/pal.h"
 
 #include <stdio.h>
 #include <stdlib.h>

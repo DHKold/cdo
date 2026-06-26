@@ -1,4 +1,4 @@
-#include "pal.h"
+#include "pal/pal.h"
 #include <string.h>
 
 void pal_path_normalize(char* path) {

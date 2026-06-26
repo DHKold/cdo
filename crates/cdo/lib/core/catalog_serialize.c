@@ -5,8 +5,8 @@
  * preserving array ordering and key-value pair ordering.
  */
 
-#include "catalog.h"
-#include "output.h"
+#include "core/catalog.h"
+#include "core/output.h"
 
 #include <stdio.h>
 #include <stdlib.h>
