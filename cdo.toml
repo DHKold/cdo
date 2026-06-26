@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/cdo", "crates/cdo_pbt"]
+
+[workspace.settings]
+c-standard = 17
+cpp-standard = 20
+
+[workspace.profiles.debug]
+optimize = false
+debug = true
+defines = ["DEBUG"]
+
+[workspace.profiles.release]
+optimize = true
+debug = false
+defines = ["NDEBUG"]
+
+[workspace.profiles.relwithdebinfo]
+optimize = true
+debug = true
+defines = ["NDEBUG"]

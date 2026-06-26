@@ -9,9 +9,8 @@ dist/
 *.pdb
 *.ilk
 
-# cdo caches and portable tools
-.cdo/cache/
-.cdo/tools/
+# cdo local data (vendored tools, download cache)
+.cdo/
 
 # Dependency archives, but not vendored dependency source/binaries
 third_party/**/*.zip
