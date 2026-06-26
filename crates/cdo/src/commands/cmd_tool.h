@@ -9,7 +9,9 @@ extern "C" {
 
 /// Execute the tool command.
 /// Subcommands:
-///   install <name> --url <url> [--refresh]  - Download, cache, and extract a tool
+///   install <name> [--url <url>] [--version <constraint>] [--refresh]
+///     - Download, cache, and extract a tool
+///     - If --url is omitted, resolves from catalog
 ///   list                                     - List installed tools
 ///   remove <name>                            - Remove an installed tool
 /// Returns 0 on success, non-zero on failure.

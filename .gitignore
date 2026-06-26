@@ -6,6 +6,7 @@ dist/
 *.dll
 *.lib
 *.obj
+*.o
 *.pdb
 *.ilk
 

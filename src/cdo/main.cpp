@@ -19,6 +19,7 @@ extern "C" {
 #include "commands/cmd_tool.h"
 #include "commands/cmd_doctor.h"
 #include "commands/cmd_shader.h"
+#include "commands/cmd_catalog.h"
 }
 
 #include <cstdio>
@@ -40,6 +41,8 @@ static void print_usage(FILE* out) {
         "  init      Initialize a project in the current directory\n"
         "  add       Add a dependency to the current crate\n"
         "  remove    Remove a dependency from the current crate\n"
+        "  deps      Manage dependencies (add, remove, list)\n"
+        "  catalog   Browse and search the package/tool catalog\n"
         "  tool      Manage local tool installations\n"
         "  doctor    Check environment health\n"
         "  shader    Compile HLSL shaders\n"
@@ -63,7 +66,8 @@ static const char* find_command_token(int argc, char* argv[]) {
         if (std::strcmp(argv[i], "--color") == 0 ||
             std::strcmp(argv[i], "--log-level") == 0 ||
             std::strcmp(argv[i], "--profile") == 0 ||
-            std::strcmp(argv[i], "--jobs") == 0) {
+            std::strcmp(argv[i], "--jobs") == 0 ||
+            std::strcmp(argv[i], "--version") == 0) {
             i++; // skip next arg (the value)
         }
     }
@@ -128,6 +132,10 @@ int main(int argc, char* argv[]) {
             return cmd_doctor(&opts);
         case CDO_CMD_SHADER:
             return cmd_shader(&opts);
+        case CDO_CMD_CATALOG:
+            return cmd_catalog(&opts);
+        case CDO_CMD_DEPS:
+            return cmd_deps(&opts);
         case CDO_CMD_HELP:
             cdo_cli_print_help(CDO_CMD_HELP, stdout);
             return 0;
@@ -145,6 +153,9 @@ int main(int argc, char* argv[]) {
                         std::fprintf(stderr, "  %s\n", suggestions[i]);
                     }
                 }
+                std::fprintf(stderr, "\nAvailable commands: build, run, test, clean, new, init, "
+                    "add, remove, deps, tool, catalog, doctor, shader\n");
+                std::fprintf(stderr, "Run 'cdo --help' for full usage information.\n");
             } else {
                 print_usage(stdout);
                 return 0;

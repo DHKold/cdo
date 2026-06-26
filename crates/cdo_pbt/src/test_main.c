@@ -859,17 +859,17 @@ TEST(prop_toml_round_trip) {
 static const char *KNOWN_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
     "add", "remove", "source", "shader", "tool", "doctor",
-    "self", "help",
+    "self", "deps", "catalog", "help",
 };
-#define KNOWN_COMMAND_COUNT 14
+#define KNOWN_COMMAND_COUNT 16
 
 /* Commands eligible for suggestion (cli.c excludes "help") */
 static const char *SUGGESTABLE_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
     "add", "remove", "source", "shader", "tool", "doctor",
-    "self",
+    "self", "deps", "catalog",
 };
-#define SUGGESTABLE_COMMAND_COUNT 13
+#define SUGGESTABLE_COMMAND_COUNT 15
 
 /* Compute the suggestion threshold matching cli.c logic */
 static int cli_suggest_threshold(const char *input) {

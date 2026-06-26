@@ -301,6 +301,73 @@ static void object_path_from_source(const char* source, const char* build_dir,
 }
 
 // ---------------------------------------------------------------------------
+// Post-link: Deploy catalog files alongside the binary
+// ---------------------------------------------------------------------------
+
+/// Copy catalog TOML files from {workspace_root}/catalogs/ to
+/// {build_dir}/catalogs/ so that the built binary can find built-in catalogs
+/// relative to its output directory.
+/// Returns the number of files copied, or -1 on error.
+static int deploy_catalog_files(const char* ws_root, const char* build_dir) {
+    char src_dir[520];
+    if (pal_path_join(src_dir, sizeof(src_dir), ws_root, "catalogs") != 0) {
+        return -1;
+    }
+
+    /* Check if workspace has a catalogs/ directory */
+    if (pal_path_exists(src_dir) != 1) {
+        return 0; /* No catalogs to deploy — not an error */
+    }
+
+    /* Create destination catalogs/ directory */
+    char dest_dir[520];
+    if (pal_path_join(dest_dir, sizeof(dest_dir), build_dir, "catalogs") != 0) {
+        return -1;
+    }
+    pal_mkdir_p(dest_dir);
+
+    /* Copy known catalog .toml files */
+    const char* catalog_files[] = { "tools.toml", "packages.toml" };
+    int num_catalog_files = 2;
+    int copied = 0;
+
+    for (int i = 0; i < num_catalog_files; i++) {
+        char src_path[520];
+        if (pal_path_join(src_path, sizeof(src_path), src_dir, catalog_files[i]) != 0) {
+            continue;
+        }
+
+        if (pal_path_exists(src_path) != 1) {
+            continue; /* File doesn't exist — skip */
+        }
+
+        char* buf = NULL;
+        size_t buf_len = 0;
+        if (pal_file_read(src_path, &buf, &buf_len) != 0) {
+            cdo_warn("failed to read catalog file '%s' for deployment", src_path);
+            continue;
+        }
+
+        char dest_path[520];
+        if (pal_path_join(dest_path, sizeof(dest_path), dest_dir, catalog_files[i]) != 0) {
+            free(buf);
+            continue;
+        }
+
+        if (pal_file_write(dest_path, buf, buf_len) != 0) {
+            cdo_warn("failed to write catalog file '%s'", dest_path);
+            free(buf);
+            continue;
+        }
+
+        free(buf);
+        copied++;
+    }
+
+    return copied;
+}
+
+// ---------------------------------------------------------------------------
 // cmd_build implementation
 // ---------------------------------------------------------------------------
 
@@ -524,6 +591,59 @@ int cmd_build(const CdoOptions* opts) {
                 strncpy(dep_link_buf[dep_link_lib_count], dep_crate->name, 63);
                 dep_link_libs[dep_link_lib_count] = dep_link_buf[dep_link_lib_count];
                 dep_link_lib_count++;
+            }
+        }
+
+        // 5a.1: Resolve dev-dependencies (conditionally)
+        // Include dev-deps when:
+        //   - Profile is "debug" (not optimized)
+        //   - Crate type is CRATE_TEST (always, regardless of profile)
+        // Exclude dev-deps when:
+        //   - Profile is "release" (optimized) and crate is not a test crate
+        bool include_dev_deps = false;
+        if (crate->type == CRATE_TEST) {
+            include_dev_deps = true;  // Tests always get dev-deps
+        } else if (!build_profile.optimize) {
+            include_dev_deps = true;  // Debug profile includes dev-deps
+        }
+
+        if (include_dev_deps && crate->dev_dep_count > 0) {
+            for (int d = 0; d < crate->dev_dep_count; d++) {
+                int dep_idx = crate->dev_dep_indices[d];
+                if (dep_idx < 0 || dep_idx >= ws.crate_count) continue;
+                Crate* dep_crate = &ws.crates[dep_idx];
+
+                // Include the dev-dependency crate's include/ directory
+                static char dev_dep_inc_buf[64][260];
+                char dep_path[260];
+                pal_path_join(dep_path, sizeof(dep_path), ws.root_path, dep_crate->path);
+
+                char inc_path[260];
+                pal_path_join(inc_path, sizeof(inc_path), dep_path, "include");
+                if (pal_path_exists(inc_path) == 0 && dep_include_count < 64) {
+                    strncpy(dev_dep_inc_buf[dep_include_count], inc_path, 259);
+                    dep_include_paths[dep_include_count] = dev_dep_inc_buf[dep_include_count];
+                    dep_include_count++;
+                }
+
+                // Also add the dev-dependency's build dir for linked artifacts
+                char dep_build_dir[260];
+                build_dir_for_crate(&ws, dep_crate, profile, dep_build_dir, sizeof(dep_build_dir));
+                if (dep_crate->type == CRATE_STATIC_LIB || dep_crate->type == CRATE_SHARED_LIB) {
+                    static char dev_dep_lib_buf[64][260];
+                    if (dep_lib_count < 64) {
+                        strncpy(dev_dep_lib_buf[dep_lib_count], dep_build_dir, 259);
+                        dep_lib_paths[dep_lib_count] = dev_dep_lib_buf[dep_lib_count];
+                        dep_lib_count++;
+                    }
+
+                    static char dev_dep_link_buf[128][64];
+                    if (dep_link_lib_count < 128) {
+                        strncpy(dev_dep_link_buf[dep_link_lib_count], dep_crate->name, 63);
+                        dep_link_libs[dep_link_lib_count] = dev_dep_link_buf[dep_link_lib_count];
+                        dep_link_lib_count++;
+                    }
+                }
             }
         }
 
@@ -788,6 +908,15 @@ int cmd_build(const CdoOptions* opts) {
             if (rc != 0) {
                 cdo_error("linking failed for crate '%s'", crate->name);
                 failed = 1;
+            }
+
+            // Post-link: deploy catalog files alongside executable binaries
+            if (!failed && crate->type == CRATE_EXECUTABLE) {
+                int deployed = deploy_catalog_files(ws.root_path, build_dir);
+                if (deployed > 0) {
+                    cdo_debug("deployed %d catalog file(s) to %s/catalogs/",
+                              deployed, build_dir);
+                }
             }
         }
 

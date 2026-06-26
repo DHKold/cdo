@@ -24,6 +24,8 @@ typedef enum {
     CDO_CMD_TOOL,
     CDO_CMD_DOCTOR,
     CDO_CMD_SELF,
+    CDO_CMD_CATALOG,
+    CDO_CMD_DEPS,
     CDO_CMD_HELP,
     CDO_CMD_UNKNOWN,
 } CdoCommand;
@@ -37,7 +39,11 @@ typedef struct {
     bool            quiet;
     bool            help;
     bool            release;
+    bool            dev;                // --dev flag (deps add/remove scope)
+    bool            filter_tools;       // --tools flag (catalog list filter)
+    bool            filter_packages;    // --packages flag (catalog list filter)
     const char*     profile;
+    const char*     version_constraint; // --version <constraint>
     int             jobs;           // 0 = auto-detect
     int             argc_rest;      // args after --
     const char**    argv_rest;

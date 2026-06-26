@@ -24,6 +24,8 @@ typedef struct {
     int             cpp_standard;   // 17, 20, 23
     int             dep_count;
     int*            dep_indices;    // indices into workspace crate array
+    int             dev_dep_count;
+    int*            dev_dep_indices; // indices into workspace crate array (dev-only deps)
     char**          link_libs;      // platform link libraries (e.g., "winhttp", "pthread")
     int             link_lib_count;
 } Crate;

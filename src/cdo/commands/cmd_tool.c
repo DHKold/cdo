@@ -3,6 +3,8 @@
 #include "core/http.h"
 #include "core/archive.h"
 #include "core/toml.h"
+#include "core/catalog.h"
+#include "core/checksum.h"
 #include "pal/pal.h"
 
 #include <string.h>
@@ -34,14 +36,16 @@ typedef struct {
     const char* subcommand;   // "install", "list", "remove"
     const char* tool_name;
     const char* url;
+    const char* version;      // optional version constraint (from --version)
+    const char* checksum;     // resolved checksum from catalog (algorithm:hex_digest)
     bool        refresh;
 } ToolArgs;
 
 /// Parse tool-specific arguments from positional_args and argv_rest.
-/// Expected invocation: cdo tool install <name> --url <url> [--refresh]
+/// Expected invocation: cdo tool install <name> [--url <url>] [--version <constraint>] [--refresh]
 /// The CLI parser puts "install" and "<name>" into positional_args,
-/// and unrecognized flags (--url, --refresh) are skipped.
-/// We need to re-scan for --url and --refresh from argv_rest.
+/// and unrecognized flags (--url, --refresh, --version) are skipped.
+/// We need to re-scan for --url, --version, and --refresh from argv_rest.
 static int parse_tool_args(const CdoOptions* opts, ToolArgs* args) {
     memset(args, 0, sizeof(*args));
 
@@ -56,15 +60,12 @@ static int parse_tool_args(const CdoOptions* opts, ToolArgs* args) {
 
     if (strcmp(args->subcommand, "install") == 0) {
         if (opts->positional_count < 2) {
-            cdo_error("Missing tool name. Usage: cdo tool install <name> --url <url>");
+            cdo_error("Missing tool name. Usage: cdo tool install <name> [--url <url>]");
             return 1;
         }
         args->tool_name = opts->positional_args[1];
 
-        // Scan remaining positional args for --url and --refresh
-        // The CLI parser treats unrecognized flags as skipped, so we look
-        // in positional_args for any that might have been captured, and
-        // also check argv_rest.
+        // Scan remaining positional args for --url, --version, and --refresh
         for (int i = 2; i < opts->positional_count; i++) {
             const char* arg = opts->positional_args[i];
             if (strcmp(arg, "--refresh") == 0) {
@@ -73,13 +74,14 @@ static int parse_tool_args(const CdoOptions* opts, ToolArgs* args) {
                 args->url = arg + 6;
             } else if (strcmp(arg, "--url") == 0 && i + 1 < opts->positional_count) {
                 args->url = opts->positional_args[++i];
-            } else if (!args->url) {
-                // Treat extra positional as URL if no --url given
-                args->url = arg;
+            } else if (strncmp(arg, "--version=", 10) == 0) {
+                args->version = arg + 10;
+            } else if (strcmp(arg, "--version") == 0 && i + 1 < opts->positional_count) {
+                args->version = opts->positional_args[++i];
             }
         }
 
-        // Also check argv_rest for --url and --refresh
+        // Also check argv_rest for --url, --version, and --refresh
         for (int i = 0; i < opts->argc_rest; i++) {
             const char* arg = opts->argv_rest[i];
             if (strcmp(arg, "--refresh") == 0) {
@@ -88,13 +90,14 @@ static int parse_tool_args(const CdoOptions* opts, ToolArgs* args) {
                 args->url = arg + 6;
             } else if (strcmp(arg, "--url") == 0 && i + 1 < opts->argc_rest) {
                 args->url = opts->argv_rest[++i];
+            } else if (strncmp(arg, "--version=", 10) == 0) {
+                args->version = arg + 10;
+            } else if (strcmp(arg, "--version") == 0 && i + 1 < opts->argc_rest) {
+                args->version = opts->argv_rest[++i];
             }
         }
 
-        if (!args->url) {
-            cdo_error("Missing URL. Usage: cdo tool install <name> --url <url>");
-            return 1;
-        }
+        // NOTE: --url is now optional. If not provided, catalog resolution will be attempted.
     } else if (strcmp(args->subcommand, "remove") == 0) {
         if (opts->positional_count < 2) {
             cdo_error("Missing tool name. Usage: cdo tool remove <name>");
@@ -104,7 +107,9 @@ static int parse_tool_args(const CdoOptions* opts, ToolArgs* args) {
     } else if (strcmp(args->subcommand, "list") == 0) {
         // No extra args needed
     } else {
-        cdo_error("Unknown subcommand '%s'. Use install, list, or remove.", args->subcommand);
+        cdo_error("Unknown subcommand '%s'", args->subcommand);
+        cdo_info("Available subcommands: install, list, remove");
+        cdo_info("Run 'cdo tool --help' for usage information.");
         return 1;
     }
 
@@ -239,12 +244,56 @@ static int extract_archive(const char* archive_path, const char* dest_dir) {
 static int tool_install(const ToolArgs* args) {
     const char* name = args->tool_name;
     const char* url = args->url;
+    const char* checksum_str = args->checksum;
+
+    // --- Catalog resolution: if no --url provided, resolve from catalog ---
+    Catalog catalog = {0};
+    CatalogResolveResult resolve_result = {0};
+    bool used_catalog = false;
+
+    if (!url || url[0] == '\0') {
+        // Detect current platform
+        CatalogPlatform platform = {0};
+        int rc = catalog_detect_platform(&platform);
+        if (rc != 0) {
+            cdo_error("Failed to detect platform");
+            return 1;
+        }
+
+        // Load catalogs from all search locations
+        rc = catalog_load(&catalog, ".");
+        if (rc != 0) {
+            cdo_error("Failed to load catalogs");
+            return 1;
+        }
+
+        // Resolve the tool by name and optional version constraint
+        rc = catalog_resolve_tool(&catalog, name, args->version, &platform, &resolve_result);
+        if (rc != 0) {
+            catalog_free(&catalog);
+            // Error message is emitted by catalog_resolve_tool
+            return 1;
+        }
+
+        url = resolve_result.url;
+        if (resolve_result.checksum[0] != '\0') {
+            checksum_str = resolve_result.checksum;
+        }
+        used_catalog = true;
+
+        if (resolve_result.version[0] != '\0') {
+            cdo_info("Resolved '%s' version %s for platform %s",
+                     name, resolve_result.version, platform.triple);
+        }
+    }
+
     const char* filename = url_filename(url);
 
     // Build cache path: .cdo/cache/<filename>
     char cache_path[MAX_PATH_LEN];
     if (pal_path_join(cache_path, sizeof(cache_path), CACHE_DIR, filename) != 0) {
         cdo_error("Cache path too long");
+        if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
         return 1;
     }
 
@@ -252,12 +301,14 @@ static int tool_install(const ToolArgs* args) {
     char tool_dir[MAX_PATH_LEN];
     if (pal_path_join(tool_dir, sizeof(tool_dir), TOOLS_DIR, name) != 0) {
         cdo_error("Tool path too long");
+        if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
         return 1;
     }
 
     // Step 1: Ensure cache directory exists
     if (pal_mkdir_p(CACHE_DIR) != PAL_OK) {
         cdo_error("Failed to create cache directory: %s", CACHE_DIR);
+        if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
         return 1;
     }
 
@@ -289,33 +340,67 @@ static int tool_install(const ToolArgs* args) {
 
             if (rc != 0) {
                 cdo_error("Failed to download tool archive from: %s", url);
+                if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
                 return 1;
             }
         }
     }
 
-    // Step 4: Create tool directory
+    // Step 4: Checksum verification (before extraction)
+    if (checksum_str && checksum_str[0] != '\0') {
+        ChecksumSpec spec = {0};
+        int rc = checksum_parse(checksum_str, &spec);
+        if (rc != 0) {
+            cdo_error("Malformed checksum: %s", checksum_str);
+            if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
+            return 1;
+        }
+
+        cdo_info("Verifying checksum (%s)...", checksum_str);
+        rc = checksum_verify_file(cache_path, &spec);
+        if (rc != 0) {
+            // checksum_verify_file deletes the file and reports expected vs actual
+            cdo_error("Checksum verification failed for '%s'", name);
+            if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
+            return 1;
+        }
+        cdo_info("Checksum verified");
+    } else {
+        cdo_warn("Checksum not provided for '%s' — archive integrity not verified", name);
+    }
+
+    // Step 5: Create tool directory
     if (pal_mkdir_p(tool_dir) != PAL_OK) {
         cdo_error("Failed to create tool directory: %s", tool_dir);
+        if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
         return 1;
     }
 
-    // Step 5: Extract archive into tool directory
+    // Step 6: Extract archive into tool directory
     cdo_info("Extracting %s...", filename);
-    int rc = extract_archive(cache_path, tool_dir);
-    if (rc != 0) {
+    int rc2 = extract_archive(cache_path, tool_dir);
+    if (rc2 != 0) {
         cdo_error("Failed to extract archive: %s", cache_path);
+        if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
         return 1;
     }
 
-    // Step 6: Write cdo-tool.toml manifest
-    rc = write_tool_manifest(tool_dir, name, url);
-    if (rc != 0) {
+    // Step 7: Write cdo-tool.toml manifest
+    rc2 = write_tool_manifest(tool_dir, name, url);
+    if (rc2 != 0) {
+        if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
         return 1;
     }
 
-    // Step 7: Report success
+    // Step 8: Report success
     cdo_info("Tool '%s' installed successfully", name);
+
+    // Cleanup catalog resources
+    if (used_catalog) {
+        catalog_resolve_result_free(&resolve_result);
+        catalog_free(&catalog);
+    }
+
     return 0;
 }
 
@@ -368,9 +453,9 @@ static int tool_remove(const ToolArgs* args) {
 // --- Public API ---
 
 int cmd_tool(const CdoOptions* opts) {
-    if (opts->help) {
+    if (opts->help || opts->positional_count < 1) {
         cdo_cli_print_help(CDO_CMD_TOOL, stdout);
-        return 0;
+        return opts->help ? 0 : 1;
     }
 
     ToolArgs args;

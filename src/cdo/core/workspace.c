@@ -324,6 +324,24 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
         }
     }
 
+    // Parse dev-dependencies (just collect names for now; indices resolved later)
+    // Dev-dependencies are stored as a table under [dev-dependencies]
+    const TomlValue* dev_deps_val = toml_get(root, "dev-dependencies");
+    if (dev_deps_val && (dev_deps_val->type == TOML_TABLE || dev_deps_val->type == TOML_INLINE_TABLE)) {
+        TomlTable* dev_deps_table = dev_deps_val->as.table;
+        crate->dev_dep_count = dev_deps_table->count;
+        if (crate->dev_dep_count > 0) {
+            crate->dev_dep_indices = (int*)calloc((size_t)crate->dev_dep_count, sizeof(int));
+            if (!crate->dev_dep_indices) {
+                crate->dev_dep_count = 0;
+            } else {
+                for (int i = 0; i < crate->dev_dep_count; i++) {
+                    crate->dev_dep_indices[i] = -1;
+                }
+            }
+        }
+    }
+
     // Parse link-libs (platform link libraries)
     const TomlValue* libs_val = toml_get(root, "build.link-libs");
     if (libs_val && libs_val->type == TOML_ARRAY && libs_val->as.array) {
@@ -354,7 +372,7 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
 static int resolve_dep_indices(Workspace* ws) {
     for (int ci = 0; ci < ws->crate_count; ci++) {
         Crate* crate = &ws->crates[ci];
-        if (crate->dep_count == 0) continue;
+        if (crate->dep_count == 0 && crate->dev_dep_count == 0) continue;
 
         // Re-read the crate manifest to get dependency names
         char crate_dir[520];
@@ -376,6 +394,7 @@ static int resolve_dep_indices(Workspace* ws) {
         }
         free(buf);
 
+        // Resolve normal dependencies
         const TomlValue* deps_val = toml_get(root, "dependencies");
         if (deps_val && (deps_val->type == TOML_TABLE || deps_val->type == TOML_INLINE_TABLE)) {
             TomlTable* deps_table = deps_val->as.table;
@@ -387,6 +406,26 @@ static int resolve_dep_indices(Workspace* ws) {
                     if (j == ci) continue; // Skip self
                     if (strcmp(entry->key, ws->crates[j].name) == 0) {
                         crate->dep_indices[di] = j;
+                        break;
+                    }
+                }
+                entry = entry->next;
+                di++;
+            }
+        }
+
+        // Resolve dev-dependencies
+        const TomlValue* dev_deps_val = toml_get(root, "dev-dependencies");
+        if (dev_deps_val && (dev_deps_val->type == TOML_TABLE || dev_deps_val->type == TOML_INLINE_TABLE)) {
+            TomlTable* dev_deps_table = dev_deps_val->as.table;
+            TomlEntry* entry = dev_deps_table->head;
+            int di = 0;
+            while (entry && di < crate->dev_dep_count) {
+                // Match this dev-dependency name against workspace crates
+                for (int j = 0; j < ws->crate_count; j++) {
+                    if (j == ci) continue; // Skip self
+                    if (strcmp(entry->key, ws->crates[j].name) == 0) {
+                        crate->dev_dep_indices[di] = j;
                         break;
                     }
                 }
@@ -767,6 +806,7 @@ void workspace_free(Workspace* ws) {
     if (ws->crates) {
         for (int i = 0; i < ws->crate_count; i++) {
             free(ws->crates[i].dep_indices);
+            free(ws->crates[i].dev_dep_indices);
         }
         free(ws->crates);
         ws->crates = NULL;

@@ -22,6 +22,8 @@ static const CommandEntry command_table[] = {
     { "tool",    CDO_CMD_TOOL    },
     { "doctor",  CDO_CMD_DOCTOR  },
     { "self",    CDO_CMD_SELF    },
+    { "deps",    CDO_CMD_DEPS    },
+    { "catalog", CDO_CMD_CATALOG },
     { "help",    CDO_CMD_HELP    },
 };
 
@@ -188,6 +190,32 @@ int cdo_cli_parse(int argc, char** argv, CdoOptions* opts) {
                 }
                 continue;
             }
+            // --dev
+            if (strcmp(arg, "--dev") == 0) {
+                opts->dev = true;
+                continue;
+            }
+            // --version=CONSTRAINT or --version CONSTRAINT
+            if (strncmp(arg, "--version=", 10) == 0) {
+                opts->version_constraint = arg + 10;
+                continue;
+            }
+            if (strcmp(arg, "--version") == 0) {
+                if (i + 1 < argc) {
+                    opts->version_constraint = argv[++i];
+                }
+                continue;
+            }
+            // --tools
+            if (strcmp(arg, "--tools") == 0) {
+                opts->filter_tools = true;
+                continue;
+            }
+            // --packages
+            if (strcmp(arg, "--packages") == 0) {
+                opts->filter_packages = true;
+                continue;
+            }
             // Unrecognized option — skip (could be command-specific)
             continue;
         }
@@ -236,6 +264,8 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "  init      Initialize a project in current directory\n"
             "  add       Add a dependency\n"
             "  remove    Remove a dependency\n"
+            "  deps      Manage dependencies (add, remove, list)\n"
+            "  catalog   Browse and search the package/tool catalog\n"
             "  source    Manage source files\n"
             "  shader    Compile shaders\n"
             "  tool      Manage vendored tools\n"
@@ -522,10 +552,55 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "  cdo self version       Show current version\n"
         );
         break;
+
+    case CDO_CMD_CATALOG:
+        fprintf(out,
+            "Browse and search the package/tool catalog\n"
+            "\n"
+            "Usage: cdo catalog <SUBCOMMAND> [OPTIONS]\n"
+            "\n"
+            "Subcommands:\n"
+            "  list       List available catalog entries\n"
+            "  search     Search entries by name or description\n"
+            "\n"
+            "Options:\n"
+            "      --tools            Show only tool entries\n"
+            "      --packages         Show only package entries\n"
+            "  -h, --help             Print help information\n"
+            "\n"
+            "Examples:\n"
+            "  cdo catalog list               List all entries\n"
+            "  cdo catalog list --tools       List only tools\n"
+            "  cdo catalog search sdl         Search for 'sdl'\n"
+        );
+        break;
+
+    case CDO_CMD_DEPS:
+        fprintf(out,
+            "Manage project dependencies\n"
+            "\n"
+            "Usage: cdo deps <SUBCOMMAND> [OPTIONS]\n"
+            "\n"
+            "Subcommands:\n"
+            "  add        Add a dependency\n"
+            "  remove     Remove a dependency\n"
+            "  list       List all dependencies\n"
+            "\n"
+            "Options:\n"
+            "      --dev              Target dev-dependencies\n"
+            "      --version VER      Version constraint\n"
+            "  -h, --help             Print help information\n"
+            "\n"
+            "Examples:\n"
+            "  cdo deps add sdl3              Add latest sdl3\n"
+            "  cdo deps add sdl3 --version ^3.2.0\n"
+            "  cdo deps add theft --dev       Add as dev dependency\n"
+            "  cdo deps remove sdl3           Remove a dependency\n"
+            "  cdo deps list                  List all dependencies\n"
+        );
+        break;
     }
 }
-
-// --- Levenshtein edit distance ---
 
 static int cdo_min3(int a, int b, int c) {
     int m = a < b ? a : b;
