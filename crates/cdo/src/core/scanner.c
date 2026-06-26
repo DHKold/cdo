@@ -215,7 +215,7 @@ int scanner_scan_sources(const char* crate_path, const char** exclude_patterns,
     pal_path_normalize(src_path);
 
     // Check if src/ exists
-    if (!pal_path_exists(src_path)) {
+    if (pal_path_exists(src_path) != 0) {
         // No src/ directory — return empty list (not an error)
         return 0;
     }
@@ -269,7 +269,7 @@ int scanner_scan_headers(const char* crate_path, FileList* out) {
     pal_path_normalize(inc_path);
 
     // Check if include/ exists
-    if (!pal_path_exists(inc_path)) {
+    if (pal_path_exists(inc_path) != 0) {
         // No include/ directory — return empty list (not an error)
         return 0;
     }

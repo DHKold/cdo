@@ -39,8 +39,6 @@ static void print_usage(FILE* out) {
         "  clean     Remove build artifacts\n"
         "  new       Create a new project from a template\n"
         "  init      Initialize a project in the current directory\n"
-        "  add       Add a dependency to the current crate\n"
-        "  remove    Remove a dependency from the current crate\n"
         "  deps      Manage dependencies (add, remove, list)\n"
         "  catalog   Browse and search the package/tool catalog\n"
         "  tool      Manage local tool installations\n"
@@ -122,10 +120,6 @@ int main(int argc, char* argv[]) {
             return cmd_new(&opts);
         case CDO_CMD_INIT:
             return cmd_init(&opts);
-        case CDO_CMD_ADD:
-            return cmd_add(&opts);
-        case CDO_CMD_REMOVE:
-            return cmd_remove(&opts);
         case CDO_CMD_TOOL:
             return cmd_tool(&opts);
         case CDO_CMD_DOCTOR:
@@ -154,7 +148,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 std::fprintf(stderr, "\nAvailable commands: build, run, test, clean, new, init, "
-                    "add, remove, deps, tool, catalog, doctor, shader\n");
+                    "deps, tool, catalog, doctor, shader\n");
                 std::fprintf(stderr, "Run 'cdo --help' for full usage information.\n");
             } else {
                 print_usage(stdout);

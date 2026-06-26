@@ -1261,6 +1261,14 @@ static int link_gcc_clang(const LinkJob* job, const CompilerInfo* info, LinkMode
         args[n++] = "-shared";
     }
 
+    // Extra flags (e.g., coverage instrumentation)
+    if (job->extra_flags && job->extra_flag_count > 0) {
+        for (int i = 0; i < job->extra_flag_count; i++) {
+            if (n >= MAX_LINK_ARGS) return -1;
+            args[n++] = job->extra_flags[i];
+        }
+    }
+
     PalSpawnOpts opts;
     memset(&opts, 0, sizeof(opts));
     opts.program = info->path;
@@ -1344,6 +1352,14 @@ static int link_msvc(const LinkJob* job, const CompilerInfo* info, LinkMode mode
         } else {
             snprintf(lib_bufs[i], sizeof(lib_bufs[i]), "%s.lib", lib);
             args[n++] = lib_bufs[i];
+        }
+    }
+
+    // Extra flags (e.g., coverage instrumentation)
+    if (job->extra_flags && job->extra_flag_count > 0) {
+        for (int i = 0; i < job->extra_flag_count; i++) {
+            if (n >= MAX_LINK_ARGS) return -1;
+            args[n++] = job->extra_flags[i];
         }
     }
 

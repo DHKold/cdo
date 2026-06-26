@@ -256,12 +256,12 @@ int pal_rmdir_r(const char* path) {
 }
 
 int pal_path_exists(const char* path) {
-    if (!path) return 0;
+    if (!path) return 1;
     wchar_t* wpath = utf8_to_wide(path);
-    if (!wpath) return 0;
+    if (!wpath) return 1;
     DWORD attrs = GetFileAttributesW(wpath);
     free(wpath);
-    return (attrs != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
+    return (attrs != INVALID_FILE_ATTRIBUTES) ? 0 : 1;
 }
 
 int pal_file_read(const char* path, char** buf, size_t* len) {

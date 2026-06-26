@@ -614,22 +614,17 @@ static int regenerate_lock(const TomlTable* deps) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* cmd_add                                                                     */
+/* deps_add                                                                    */
 /* -------------------------------------------------------------------------- */
 
-int cmd_add(const CdoOptions* opts) {
+static int deps_add(const CdoOptions* opts) {
     if (opts->positional_count == 0) {
         cdo_error("Usage: cdo deps add <package[@version]> [--dev]");
         return 1;
     }
 
-    /* Determine starting index for package arguments.
-     * When called via cmd_deps, positional_args[0] == "add" (skip it).
-     * When called directly via CDO_CMD_ADD (legacy), positional_args[0] is already a package. */
-    int start_idx = 0;
-    if (opts->positional_count > 0 && strcmp(opts->positional_args[0], "add") == 0) {
-        start_idx = 1;
-    }
+    /* positional_args[0] == "add" (from cmd_deps dispatch), skip it */
+    int start_idx = 1;
 
     /* Check if we have any actual package arguments */
     bool has_packages = false;
@@ -807,63 +802,7 @@ int cmd_add(const CdoOptions* opts) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* cmd_remove (legacy: cdo remove <package>)                                   */
-/* -------------------------------------------------------------------------- */
-
-int cmd_remove(const CdoOptions* opts) {
-    if (opts->positional_count == 0) {
-        cdo_error("Usage: cdo remove <package> [package...]");
-        return 1;
-    }
-
-    /* Load the crate manifest */
-    TomlTable* root = NULL;
-    if (manifest_load(&root) != 0) {
-        return 1;
-    }
-
-    /* Get [dependencies] — if missing, nothing to remove */
-    const TomlValue* val = toml_get(root, DEPS_SECTION);
-    if (!val || (val->type != TOML_TABLE && val->type != TOML_INLINE_TABLE)) {
-        cdo_warn("No [dependencies] section found in '%s'", CRATE_MANIFEST);
-        toml_free(root);
-        return 0;
-    }
-
-    TomlTable* deps = val->as.table;
-    bool any_removed = false;
-
-    for (int i = 0; i < opts->positional_count; i++) {
-        const char* pkg_name = opts->positional_args[i];
-
-        if (deps_remove_entry(deps, pkg_name)) {
-            cdo_info("Removed '%s'", pkg_name);
-            any_removed = true;
-        } else {
-            cdo_warn("'%s' not found in dependencies", pkg_name);
-        }
-    }
-
-    if (any_removed) {
-        /* Write updated manifest */
-        if (manifest_save(root) != 0) {
-            toml_free(root);
-            return 1;
-        }
-
-        /* Regenerate lock file */
-        if (regenerate_lock(deps) != 0) {
-            toml_free(root);
-            return 1;
-        }
-    }
-
-    toml_free(root);
-    return 0;
-}
-
-/* -------------------------------------------------------------------------- */
-/* deps_remove (new: cdo deps remove <name> [--dev])                           */
+/* deps_remove (cdo deps remove <name> [--dev])                                */
 /* -------------------------------------------------------------------------- */
 
 /// Check if --dev flag is present in the positional args starting at start_idx.
@@ -1031,7 +970,7 @@ int cmd_deps(const CdoOptions* opts) {
     const char* subcmd = opts->positional_args[0];
 
     if (strcmp(subcmd, "add") == 0) {
-        return cmd_add(opts);
+        return deps_add(opts);
     } else if (strcmp(subcmd, "remove") == 0) {
         return deps_remove(opts);
     } else if (strcmp(subcmd, "list") == 0) {

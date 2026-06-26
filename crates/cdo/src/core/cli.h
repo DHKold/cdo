@@ -17,8 +17,6 @@ typedef enum {
     CDO_CMD_CLEAN,
     CDO_CMD_NEW,
     CDO_CMD_INIT,
-    CDO_CMD_ADD,
-    CDO_CMD_REMOVE,
     CDO_CMD_SOURCE,
     CDO_CMD_SHADER,
     CDO_CMD_TOOL,
@@ -40,6 +38,7 @@ typedef struct {
     bool            help;
     bool            release;
     bool            dev;                // --dev flag (deps add/remove scope)
+    bool            coverage;           // --coverage flag
     bool            filter_tools;       // --tools flag (catalog list filter)
     bool            filter_packages;    // --packages flag (catalog list filter)
     const char*     profile;

@@ -15,22 +15,6 @@ extern "C" {
 /// Returns 0 on success, non-zero on failure.
 int cmd_deps(const CdoOptions* opts);
 
-/// Execute the add command (legacy: cdo add <package>).
-/// For each package name in positional_args:
-///   - Searches configured registries for the package
-///   - Downloads to local cache
-///   - Adds to the crate manifest [dependencies] section
-///   - Regenerates the lock file
-/// Returns 0 on success, non-zero on failure.
-int cmd_add(const CdoOptions* opts);
-
-/// Execute the remove command (legacy: cdo remove <package>).
-/// For each package name in positional_args:
-///   - Removes the dependency from the crate manifest
-///   - Regenerates the lock file
-/// Returns 0 on success, non-zero on failure.
-int cmd_remove(const CdoOptions* opts);
-
 #ifdef __cplusplus
 }
 #endif

@@ -12,7 +12,12 @@
   #include <sys/wait.h>
   #include <errno.h>
   #include <signal.h>
+  #include <poll.h>
+  #include <time.h>
 #endif
+
+// Default timeout for child processes (2 minutes)
+#define PAL_DEFAULT_TIMEOUT_MS 120000
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -117,29 +122,62 @@ static char* build_env_block(const char** env) {
     return block;
 }
 
-/// Read all data from a pipe handle into a malloc'd buffer.
-static char* read_pipe_to_buf(HANDLE pipe) {
+/// Context passed to each pipe reader thread.
+typedef struct {
+    HANDLE pipe;      // read-end of the pipe (thread closes it when done)
+    char*  buf;       // output: malloc'd null-terminated buffer (caller frees)
+    size_t buf_len;   // output: number of bytes read (excluding null terminator)
+    DWORD  error;     // 0 on success, otherwise GetLastError() value
+} PipeReaderCtx;
+
+/// Resolve the effective timeout in milliseconds for WaitForMultipleObjects.
+/// 0 = use default (PAL_DEFAULT_TIMEOUT_MS), -1 = INFINITE, >0 = use as-is.
+static DWORD resolve_timeout_ms(int timeout_ms) {
+    if (timeout_ms < 0) return INFINITE;
+    if (timeout_ms == 0) return PAL_DEFAULT_TIMEOUT_MS;
+    return (DWORD)timeout_ms;
+}
+
+/// Thread function: reads a pipe to completion into a malloc'd buffer.
+static DWORD WINAPI pipe_reader_thread(LPVOID param) {
+    PipeReaderCtx* ctx = (PipeReaderCtx*)param;
     size_t capacity = 4096;
     size_t size = 0;
     char* buf = (char*)malloc(capacity);
-    if (!buf) return NULL;
+    if (!buf) {
+        ctx->buf = NULL;
+        ctx->buf_len = 0;
+        ctx->error = ERROR_NOT_ENOUGH_MEMORY;
+        CloseHandle(ctx->pipe);
+        return 1;
+    }
 
     DWORD bytes_read;
-    while (ReadFile(pipe, buf + size, (DWORD)(capacity - size - 1), &bytes_read, NULL) && bytes_read > 0) {
+    for (;;) {
+        BOOL ok = ReadFile(ctx->pipe, buf + size, (DWORD)(capacity - size - 1), &bytes_read, NULL);
+        if (!ok || bytes_read == 0) break;
         size += bytes_read;
         if (size + 1 >= capacity) {
             capacity *= 2;
             char* new_buf = (char*)realloc(buf, capacity);
             if (!new_buf) {
                 free(buf);
-                return NULL;
+                ctx->buf = NULL;
+                ctx->buf_len = 0;
+                ctx->error = ERROR_NOT_ENOUGH_MEMORY;
+                CloseHandle(ctx->pipe);
+                return 1;
             }
             buf = new_buf;
         }
     }
 
     buf[size] = '\0';
-    return buf;
+    ctx->buf = buf;
+    ctx->buf_len = size;
+    ctx->error = 0;
+    CloseHandle(ctx->pipe);
+    return 0;
 }
 
 #else // POSIX
@@ -167,6 +205,160 @@ static char* read_fd_to_buf(int fd) {
 
     buf[size] = '\0';
     return buf;
+}
+
+/// Read from two file descriptors concurrently using poll().
+/// Grows dynamic buffers as data arrives from both pipes.
+/// If timeout_ms > 0, kills the child process after that many milliseconds.
+/// timeout_ms: 0 = use default (PAL_DEFAULT_TIMEOUT_MS), -1 = infinite, >0 = use as-is.
+/// Returns 0 on success, PAL_ERR_TIMEOUT on timeout, PAL_ERR_IO on failure.
+static int read_pipes_concurrent(int fd_out, int fd_err, char** buf_out, char** buf_err,
+                                 int timeout_ms, pid_t child_pid) {
+    size_t cap_out = 4096, size_out = 0;
+    size_t cap_err = 4096, size_err = 0;
+
+    char* out = (char*)malloc(cap_out);
+    char* err = (char*)malloc(cap_err);
+    if (!out || !err) {
+        free(out);
+        free(err);
+        return PAL_ERR_IO;
+    }
+
+    // Resolve effective timeout
+    int effective_timeout_ms;
+    if (timeout_ms < 0) {
+        effective_timeout_ms = -1; // infinite
+    } else if (timeout_ms == 0) {
+        effective_timeout_ms = PAL_DEFAULT_TIMEOUT_MS;
+    } else {
+        effective_timeout_ms = timeout_ms;
+    }
+
+    // Get start time for timeout tracking
+    struct timespec start_time;
+    if (effective_timeout_ms > 0) {
+        clock_gettime(CLOCK_MONOTONIC, &start_time);
+    }
+
+    struct pollfd fds[2];
+    fds[0].fd = fd_out;
+    fds[0].events = POLLIN;
+    fds[1].fd = fd_err;
+    fds[1].events = POLLIN;
+
+    int active = 2;
+    int timed_out = 0;
+
+    while (active > 0) {
+        // Compute remaining time for poll
+        int poll_timeout = -1; // infinite by default
+        if (effective_timeout_ms > 0) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long elapsed_ms = (now.tv_sec - start_time.tv_sec) * 1000 +
+                              (now.tv_nsec - start_time.tv_nsec) / 1000000;
+            long remaining = effective_timeout_ms - elapsed_ms;
+            if (remaining <= 0) {
+                timed_out = 1;
+                break;
+            }
+            poll_timeout = (int)remaining;
+        }
+
+        int ret = poll(fds, 2, poll_timeout);
+        if (ret < 0) {
+            if (errno == EINTR) continue;
+            free(out);
+            free(err);
+            return PAL_ERR_IO;
+        }
+
+        if (ret == 0) {
+            // poll timed out
+            timed_out = 1;
+            break;
+        }
+
+        /* Check stdout pipe */
+        if (fds[0].fd >= 0 && (fds[0].revents & (POLLIN | POLLHUP))) {
+            ssize_t n = read(fds[0].fd, out + size_out, cap_out - size_out - 1);
+            if (n > 0) {
+                size_out += (size_t)n;
+                if (size_out + 1 >= cap_out) {
+                    cap_out *= 2;
+                    char* tmp = (char*)realloc(out, cap_out);
+                    if (!tmp) { free(out); free(err); return PAL_ERR_IO; }
+                    out = tmp;
+                }
+            } else {
+                /* EOF or error on stdout */
+                fds[0].fd = -1;
+                active--;
+            }
+        }
+
+        /* Check stderr pipe */
+        if (fds[1].fd >= 0 && (fds[1].revents & (POLLIN | POLLHUP))) {
+            ssize_t n = read(fds[1].fd, err + size_err, cap_err - size_err - 1);
+            if (n > 0) {
+                size_err += (size_t)n;
+                if (size_err + 1 >= cap_err) {
+                    cap_err *= 2;
+                    char* tmp = (char*)realloc(err, cap_err);
+                    if (!tmp) { free(out); free(err); return PAL_ERR_IO; }
+                    err = tmp;
+                }
+            } else {
+                /* EOF or error on stderr */
+                fds[1].fd = -1;
+                active--;
+            }
+        }
+    }
+
+    if (timed_out) {
+        // Kill the child process
+        kill(child_pid, SIGKILL);
+
+        // Drain remaining pipe data (child is dead, pipes will EOF soon)
+        // Set short poll timeout to drain without blocking forever
+        while (active > 0) {
+            int ret = poll(fds, 2, 100); // 100ms drain timeout
+            if (ret <= 0) break;
+            if (fds[0].fd >= 0 && (fds[0].revents & (POLLIN | POLLHUP))) {
+                ssize_t n = read(fds[0].fd, out + size_out, cap_out - size_out - 1);
+                if (n > 0) {
+                    size_out += (size_t)n;
+                    if (size_out + 1 >= cap_out) {
+                        cap_out *= 2;
+                        char* tmp = (char*)realloc(out, cap_out);
+                        if (!tmp) break;
+                        out = tmp;
+                    }
+                } else { fds[0].fd = -1; active--; }
+            }
+            if (fds[1].fd >= 0 && (fds[1].revents & (POLLIN | POLLHUP))) {
+                ssize_t n = read(fds[1].fd, err + size_err, cap_err - size_err - 1);
+                if (n > 0) {
+                    size_err += (size_t)n;
+                    if (size_err + 1 >= cap_err) {
+                        cap_err *= 2;
+                        char* tmp = (char*)realloc(err, cap_err);
+                        if (!tmp) break;
+                        err = tmp;
+                    }
+                } else { fds[1].fd = -1; active--; }
+            }
+        }
+    }
+
+    out[size_out] = '\0';
+    err[size_err] = '\0';
+
+    *buf_out = out;
+    *buf_err = err;
+    return timed_out ? PAL_ERR_TIMEOUT : 0;
 }
 
 #endif
@@ -274,19 +466,96 @@ int pal_spawn(const PalSpawnOpts* opts, PalSpawnResult* result) {
         CloseHandle(stderr_write);
     }
 
-    // Read captured output
+    // Read captured output concurrently using reader threads
     if (opts->capture_output && result) {
-        result->stdout_buf = read_pipe_to_buf(stdout_read);
-        result->stderr_buf = read_pipe_to_buf(stderr_read);
-        CloseHandle(stdout_read);
-        CloseHandle(stderr_read);
-    } else if (opts->capture_output) {
-        CloseHandle(stdout_read);
-        CloseHandle(stderr_read);
-    }
+        PipeReaderCtx stdout_ctx = { stdout_read, NULL, 0, 0 };
+        PipeReaderCtx stderr_ctx = { stderr_read, NULL, 0, 0 };
 
-    // Wait for process to complete
-    WaitForSingleObject(pi.hProcess, INFINITE);
+        HANDLE hStdoutThread = CreateThread(NULL, 0, pipe_reader_thread, &stdout_ctx, 0, NULL);
+        HANDLE hStderrThread = CreateThread(NULL, 0, pipe_reader_thread, &stderr_ctx, 0, NULL);
+
+        if (!hStdoutThread || !hStderrThread) {
+            // Thread creation failed - fall back to closing pipes and waiting
+            if (hStdoutThread) {
+                WaitForSingleObject(hStdoutThread, INFINITE);
+                CloseHandle(hStdoutThread);
+            } else {
+                CloseHandle(stdout_read);
+            }
+            if (hStderrThread) {
+                WaitForSingleObject(hStderrThread, INFINITE);
+                CloseHandle(hStderrThread);
+            } else {
+                CloseHandle(stderr_read);
+            }
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            DWORD exit_code = 0;
+            GetExitCodeProcess(pi.hProcess, &exit_code);
+            result->exit_code = (int)exit_code;
+            result->stdout_buf = stdout_ctx.buf;
+            result->stderr_buf = stderr_ctx.buf;
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            return PAL_OK;
+        }
+
+        // Wait for process and both reader threads to complete
+        HANDLE wait_handles[3] = { pi.hProcess, hStdoutThread, hStderrThread };
+        DWORD timeout = resolve_timeout_ms(opts->timeout_ms);
+        DWORD wait_result = WaitForMultipleObjects(3, wait_handles, TRUE, timeout);
+
+        if (wait_result == WAIT_TIMEOUT) {
+            // Timeout expired - terminate the child process
+            TerminateProcess(pi.hProcess, 1);
+
+            // Wait for threads to finish (they'll get broken pipe after termination)
+            WaitForMultipleObjects(2, &wait_handles[1], TRUE, 5000);
+
+            // Collect any partial buffers from thread contexts
+            result->stdout_buf = stdout_ctx.buf;
+            result->stderr_buf = stderr_ctx.buf;
+
+            CloseHandle(hStdoutThread);
+            CloseHandle(hStderrThread);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            return PAL_ERR_TIMEOUT;
+        }
+
+        // Collect buffers from thread contexts
+        result->stdout_buf = stdout_ctx.buf;
+        result->stderr_buf = stderr_ctx.buf;
+
+        CloseHandle(hStdoutThread);
+        CloseHandle(hStderrThread);
+    } else if (opts->capture_output) {
+        // No result struct - just close pipes and wait with timeout
+        CloseHandle(stdout_read);
+        CloseHandle(stderr_read);
+        DWORD timeout = resolve_timeout_ms(opts->timeout_ms);
+        DWORD wait_result = WaitForSingleObject(pi.hProcess, timeout);
+        if (wait_result == WAIT_TIMEOUT) {
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 5000);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            return PAL_ERR_TIMEOUT;
+        }
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return PAL_OK;
+    } else {
+        // No output capture - just wait for process with timeout
+        DWORD timeout = resolve_timeout_ms(opts->timeout_ms);
+        DWORD wait_result = WaitForSingleObject(pi.hProcess, timeout);
+        if (wait_result == WAIT_TIMEOUT) {
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 5000);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            return PAL_ERR_TIMEOUT;
+        }
+    }
 
     DWORD exit_code = 0;
     GetExitCodeProcess(pi.hProcess, &exit_code);
@@ -380,17 +649,83 @@ int pal_spawn(const PalSpawnOpts* opts, PalSpawnResult* result) {
         close(stdout_pipe[1]);
         close(stderr_pipe[1]);
 
+        int pipe_result = 0;
         if (result) {
-            result->stdout_buf = read_fd_to_buf(stdout_pipe[0]);
-            result->stderr_buf = read_fd_to_buf(stderr_pipe[0]);
+            pipe_result = read_pipes_concurrent(stdout_pipe[0], stderr_pipe[0],
+                                  &result->stdout_buf, &result->stderr_buf,
+                                  opts->timeout_ms, pid);
         }
 
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
+
+        // If timeout occurred, reap the child and return timeout error
+        if (pipe_result == PAL_ERR_TIMEOUT) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+            if (result) {
+                if (WIFEXITED(status)) {
+                    result->exit_code = WEXITSTATUS(status);
+                } else if (WIFSIGNALED(status)) {
+                    result->exit_code = 128 + WTERMSIG(status);
+                } else {
+                    result->exit_code = -1;
+                }
+            }
+            return PAL_ERR_TIMEOUT;
+        }
     }
 
     int status = 0;
-    waitpid(pid, &status, 0);
+
+    // If not capturing output, we still need timeout support
+    if (!opts->capture_output) {
+        int effective_timeout_ms;
+        if (opts->timeout_ms < 0) {
+            effective_timeout_ms = -1; // infinite
+        } else if (opts->timeout_ms == 0) {
+            effective_timeout_ms = PAL_DEFAULT_TIMEOUT_MS;
+        } else {
+            effective_timeout_ms = opts->timeout_ms;
+        }
+
+        if (effective_timeout_ms > 0) {
+            struct timespec start_time;
+            clock_gettime(CLOCK_MONOTONIC, &start_time);
+
+            while (1) {
+                pid_t w = waitpid(pid, &status, WNOHANG);
+                if (w > 0) break; // child exited
+                if (w < 0) return PAL_ERR_IO;
+
+                // Check timeout
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                long elapsed_ms = (now.tv_sec - start_time.tv_sec) * 1000 +
+                                  (now.tv_nsec - start_time.tv_nsec) / 1000000;
+                if (elapsed_ms >= effective_timeout_ms) {
+                    kill(pid, SIGKILL);
+                    waitpid(pid, &status, 0);
+                    if (result) {
+                        if (WIFSIGNALED(status)) {
+                            result->exit_code = 128 + WTERMSIG(status);
+                        } else {
+                            result->exit_code = -1;
+                        }
+                    }
+                    return PAL_ERR_TIMEOUT;
+                }
+
+                // Sleep briefly to avoid busy-waiting (10ms)
+                struct timespec sleep_ts = { 0, 10 * 1000000 };
+                nanosleep(&sleep_ts, NULL);
+            }
+        } else {
+            waitpid(pid, &status, 0);
+        }
+    } else {
+        waitpid(pid, &status, 0);
+    }
 
     if (result) {
         if (WIFEXITED(status)) {

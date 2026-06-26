@@ -362,11 +362,29 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
         }
     }
 
+    // Parse build.defines (crate-level preprocessor defines)
+    const TomlValue* defs_val = toml_get(root, "build.defines");
+    if (defs_val && defs_val->type == TOML_ARRAY && defs_val->as.array) {
+        TomlArray* arr = defs_val->as.array;
+        if (arr->count > 0) {
+            crate->defines = (char**)calloc((size_t)arr->count, sizeof(char*));
+            if (crate->defines) {
+                int count = 0;
+                for (int i = 0; i < arr->count; i++) {
+                    if (arr->items[i] && arr->items[i]->type == TOML_STRING &&
+                        arr->items[i]->as.string) {
+                        crate->defines[count] = strdup(arr->items[i]->as.string);
+                        if (crate->defines[count]) count++;
+                    }
+                }
+                crate->define_count = count;
+            }
+        }
+    }
+
     toml_free(root);
     return 0;
 }
-
-/// After all crates are loaded, resolve dependency names to indices.
 /// This reads each crate's manifest again to get dependency names and
 /// matches them against the workspace crate list.
 static int resolve_dep_indices(Workspace* ws) {
@@ -807,6 +825,18 @@ void workspace_free(Workspace* ws) {
         for (int i = 0; i < ws->crate_count; i++) {
             free(ws->crates[i].dep_indices);
             free(ws->crates[i].dev_dep_indices);
+            if (ws->crates[i].link_libs) {
+                for (int j = 0; j < ws->crates[i].link_lib_count; j++) {
+                    free(ws->crates[i].link_libs[j]);
+                }
+                free(ws->crates[i].link_libs);
+            }
+            if (ws->crates[i].defines) {
+                for (int j = 0; j < ws->crates[i].define_count; j++) {
+                    free(ws->crates[i].defines[j]);
+                }
+                free(ws->crates[i].defines);
+            }
         }
         free(ws->crates);
         ws->crates = NULL;

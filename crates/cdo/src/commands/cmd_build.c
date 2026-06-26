@@ -377,6 +377,8 @@ int cmd_build(const CdoOptions* opts) {
         return 1;
     }
 
+    uint64_t build_start_ms = pal_time_ms();
+
     // --- Step 1: Load workspace ---
     Workspace ws = {0};
     char cwd[260];
@@ -506,6 +508,10 @@ int cmd_build(const CdoOptions* opts) {
 
     cdo_info("profile: %s, jobs: %d", profile, jobs);
 
+    // --- Coverage flags (--coverage) ---
+    static const char* coverage_flags[] = {"-fprofile-arcs", "-ftest-coverage"};
+    int coverage_flag_count = opts->coverage ? 2 : 0;
+
     // --- Step 5: Count total compilation units for progress ---
     int total_units = 0;
     for (int i = 0; i < ws.build_order_count; i++) {
@@ -538,8 +544,6 @@ int cmd_build(const CdoOptions* opts) {
     for (int i = 0; i < ws.build_order_count; i++) {
         int idx = ws.build_order[i];
         Crate* crate = &ws.crates[idx];
-
-        cdo_info("compiling %s", crate->name);
 
         // Resolve full crate path
         char crate_full_path[260];
@@ -574,6 +578,15 @@ int cmd_build(const CdoOptions* opts) {
             pal_path_join(inc_path, sizeof(inc_path), dep_path, "include");
             if (pal_path_exists(inc_path) == 0) {
                 strncpy(dep_inc_buf[dep_include_count], inc_path, 259);
+                dep_include_paths[dep_include_count] = dep_inc_buf[dep_include_count];
+                dep_include_count++;
+            }
+
+            // Also add the dependency's src/ directory for header access
+            char dep_src_path[260];
+            pal_path_join(dep_src_path, sizeof(dep_src_path), dep_path, "src");
+            if (pal_path_exists(dep_src_path) == 0 && dep_include_count < 64) {
+                strncpy(dep_inc_buf[dep_include_count], dep_src_path, 259);
                 dep_include_paths[dep_include_count] = dep_inc_buf[dep_include_count];
                 dep_include_count++;
             }
@@ -690,13 +703,15 @@ int cmd_build(const CdoOptions* opts) {
         int dirty_count = compilable_src_count;
 
         if (dirty_count == 0) {
-            cdo_info("  %s: up to date", crate->name);
+            cdo_info("crate '%s' is up to date", crate->name);
             completed_units += sources.count;
             progress_update(progress, completed_units);
             filelist_free(&sources);
             free(dirty_indices);
             continue;
         }
+
+        cdo_info("Compiling crate '%s' (%d files)", crate->name, dirty_count);
 
         cdo_debug("  %s: %d/%d files need rebuild", crate->name, dirty_count, sources.count);
 
@@ -730,6 +745,24 @@ int cmd_build(const CdoOptions* opts) {
             break;
         }
 
+        // Merge crate-level defines with profile defines
+        int merged_define_count = build_profile.define_count + crate->define_count;
+        const char** merged_defines = NULL;
+        if (merged_define_count > 0) {
+            merged_defines = (const char**)malloc(sizeof(const char*) * (size_t)merged_define_count);
+            if (merged_defines) {
+                int idx = 0;
+                for (int d = 0; d < build_profile.define_count; d++) {
+                    merged_defines[idx++] = build_profile.defines[d];
+                }
+                for (int d = 0; d < crate->define_count; d++) {
+                    merged_defines[idx++] = crate->defines[d];
+                }
+            } else {
+                merged_define_count = 0;
+            }
+        }
+
         for (int d = 0; d < dirty_count; d++) {
             int src_idx = dirty_indices[d];
             const char* src_path = sources.paths[src_idx];
@@ -750,22 +783,33 @@ int cmd_build(const CdoOptions* opts) {
             compile_jobs[d].optimize = build_profile.optimize;
             compile_jobs[d].debug_info = build_profile.debug_info;
 
-            // Apply profile defines
-            if (build_profile.define_count > 0) {
-                compile_jobs[d].defines = (const char**)build_profile.defines;
-                compile_jobs[d].define_count = build_profile.define_count;
+            // Apply merged defines (profile + crate-level)
+            if (merged_define_count > 0) {
+                compile_jobs[d].defines = merged_defines;
+                compile_jobs[d].define_count = merged_define_count;
             } else {
                 compile_jobs[d].defines = NULL;
                 compile_jobs[d].define_count = 0;
             }
 
-            // Apply profile extra flags
-            if (build_profile.extra_flag_count > 0) {
-                compile_jobs[d].extra_flags = (const char**)build_profile.extra_flags;
-                compile_jobs[d].extra_flag_count = build_profile.extra_flag_count;
-            } else {
-                compile_jobs[d].extra_flags = NULL;
-                compile_jobs[d].extra_flag_count = 0;
+            // Apply profile extra flags + coverage flags
+            {
+                int total_extra = build_profile.extra_flag_count + coverage_flag_count;
+                if (total_extra > 0) {
+                    static const char* merged_extra_flags[BUILD_PROFILE_MAX_FLAGS + 2];
+                    int mf = 0;
+                    for (int f = 0; f < build_profile.extra_flag_count; f++) {
+                        merged_extra_flags[mf++] = build_profile.extra_flags[f];
+                    }
+                    for (int f = 0; f < coverage_flag_count; f++) {
+                        merged_extra_flags[mf++] = coverage_flags[f];
+                    }
+                    compile_jobs[d].extra_flags = merged_extra_flags;
+                    compile_jobs[d].extra_flag_count = total_extra;
+                } else {
+                    compile_jobs[d].extra_flags = NULL;
+                    compile_jobs[d].extra_flag_count = 0;
+                }
             }
 
             // Set language standard based on file type
@@ -782,6 +826,7 @@ int cmd_build(const CdoOptions* opts) {
             for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
             free(obj_paths);
             free(compile_jobs);
+            free(merged_defines);
             filelist_free(&sources);
             free(dirty_indices);
             break;
@@ -794,6 +839,7 @@ int cmd_build(const CdoOptions* opts) {
             for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
             free(obj_paths);
             free(compile_jobs);
+            free(merged_defines);
             filelist_free(&sources);
             free(dirty_indices);
             failed = 1;
@@ -820,6 +866,7 @@ int cmd_build(const CdoOptions* opts) {
             for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
             free(obj_paths);
             free(compile_jobs);
+            free(merged_defines);
             filelist_free(&sources);
             free(dirty_indices);
             failed = 1;
@@ -867,6 +914,12 @@ int cmd_build(const CdoOptions* opts) {
             link_job.link_lib_count = all_link_lib_count;
             link_job.shared = (crate->type == CRATE_SHARED_LIB);
 
+            // Propagate coverage flags to linker
+            if (coverage_flag_count > 0) {
+                link_job.extra_flags = coverage_flags;
+                link_job.extra_flag_count = coverage_flag_count;
+            }
+
             // If any source is C++, use C++ linker driver
             CompilerInfo link_compiler = compiler;
             for (int s = 0; s < sources.count; s++) {
@@ -904,6 +957,7 @@ int cmd_build(const CdoOptions* opts) {
                 }
             }
 
+            cdo_info("Linking %s", output_path);
             rc = compiler_link(&link_job, &link_compiler);
             if (rc != 0) {
                 cdo_error("linking failed for crate '%s'", crate->name);
@@ -926,6 +980,7 @@ int cmd_build(const CdoOptions* opts) {
         for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
         free(obj_paths);
         free(compile_jobs);
+        free(merged_defines);
         filelist_free(&sources);
         free(dirty_indices);
 
@@ -938,7 +993,8 @@ int cmd_build(const CdoOptions* opts) {
     if (failed) {
         cdo_error("build failed");
     } else {
-        cdo_info("build complete (%d compilation units)", total_units);
+        double elapsed_s = (double)(pal_time_ms() - build_start_ms) / 1000.0;
+        cdo_info("Build completed in %.2fs", elapsed_s);
     }
 
     build_profile_free(&build_profile);

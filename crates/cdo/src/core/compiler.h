@@ -50,6 +50,8 @@ typedef struct {
     int             lib_path_count;
     const char**    link_libs;
     int             link_lib_count;
+    const char**    extra_flags;     // additional flags (e.g., coverage)
+    int             extra_flag_count;
     bool            shared;
 } LinkJob;
 

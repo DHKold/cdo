@@ -2,3 +2,9 @@
 name = "cdo_pbt"
 type = "test"
 c-standard = 17
+
+[dependencies]
+cdo = {}
+
+[build]
+defines = ["CDO_TESTING"]

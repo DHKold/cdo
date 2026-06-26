@@ -20,7 +20,7 @@ $Root       = $PSScriptRoot
 $ToolBin    = Join-Path $Root ".cdo\tools\w64devkit\bin"
 $GCC        = Join-Path $ToolBin "gcc.exe"
 $GPP        = Join-Path $ToolBin "g++.exe"
-$BuildDir   = Join-Path $Root "build\debug"
+$BuildDir   = Join-Path $Root "build\release"
 $CdoBuild   = Join-Path $BuildDir "cdo"
 $TestBuild  = Join-Path $BuildDir "cdo_pbt"
 
@@ -29,8 +29,8 @@ if ($env:PATH -notlike "*$ToolBin*") {
     $env:PATH = "$ToolBin;$env:PATH"
 }
 
-$CFlags     = @("-std=c17", "-Wall", "-Wextra", "-Wno-unused-function", "-g", "-DDEBUG")
-$CppFlags   = @("-std=c++20", "-Wall", "-Wextra", "-g", "-DDEBUG")
+$CFlags     = @("-std=c17", "-Wall", "-Wextra", "-Wno-unused-function")
+$CppFlags   = @("-std=c++20", "-Wall", "-Wextra")
 $LinkLibs   = @("-lwinhttp")
 
 # --- Source Directories ---
@@ -151,12 +151,25 @@ function Build-Tests {
         $objects += $obj
     }
 
-    # 2. Compile test source files (only test_main.c — skip test_cdo.cpp which has conflicting main)
+    # 2. Compile test source files (test_main.c + all unit/*.c — skip test_cdo.cpp which has conflicting main)
     $testFile = Join-Path $TestSrc "test_main.c"
     Write-Host "  CC test_main.c"
     $obj = Compile-File -File $testFile -OutDir $TestBuild `
         -IncludePaths $includes -ExtraFlags @("-DCDO_TESTING") -ObjName "test_main.o"
     $objects += $obj
+
+    # 2b. Compile all unit test files from tests/unit/
+    $unitDir = Join-Path $TestSrc "unit"
+    if (Test-Path $unitDir) {
+        $unitSources = Get-Sources -Dir $unitDir -Exclude @()
+        foreach ($f in $unitSources) {
+            $objName = "unit_" + ($f.Name -replace '\.(c|cpp|cxx|cc)$', '.o')
+            Write-Host "  CC $($f.Name) (unit)"
+            $obj = Compile-File -File $f.FullName -OutDir $TestBuild `
+                -IncludePaths $includes -ExtraFlags @("-DCDO_TESTING") -ObjName $objName
+            $objects += $obj
+        }
+    }
 
     # 3. Link
     $exe = Join-Path $TestBuild "cdo_pbt.exe"

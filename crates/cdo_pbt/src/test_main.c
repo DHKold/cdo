@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include "vendor/theft.h"
+#include "test_harness.h"
 
 /*============================================================================
  * Test runner infrastructure
@@ -26,29 +27,13 @@ static test_entry_t g_tests[MAX_TESTS];
 static int g_test_count = 0;
 
 /* Register a test function. Called before main via constructor or explicit init. */
-static void register_test(const char *name, int (*func)(void)) {
+void register_test(const char *name, int (*func)(void)) {
     if (g_test_count < MAX_TESTS) {
         g_tests[g_test_count].name = name;
         g_tests[g_test_count].func = func;
         g_test_count++;
     }
 }
-
-/* Macro for defining and auto-registering a test */
-#define TEST(test_name)                                             \
-    static int test_name##_impl(void);                              \
-    static void __attribute__((constructor)) test_name##_register(void) { \
-        register_test(#test_name, test_name##_impl);                \
-    }                                                               \
-    static int test_name##_impl(void)
-
-/* For compilers that don't support __attribute__((constructor)),
- * provide a manual registration fallback */
-#ifdef _MSC_VER
-#undef TEST
-#define TEST(test_name) static int test_name##_impl(void)
-#define REGISTER_TEST(test_name) register_test(#test_name, test_name##_impl)
-#endif
 
 /*============================================================================
  * Trivial test to verify the framework works
@@ -858,18 +843,18 @@ TEST(prop_toml_round_trip) {
 /* Known command names — must match cli.c command_table */
 static const char *KNOWN_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
-    "add", "remove", "source", "shader", "tool", "doctor",
+    "source", "shader", "tool", "doctor",
     "self", "deps", "catalog", "help",
 };
-#define KNOWN_COMMAND_COUNT 16
+#define KNOWN_COMMAND_COUNT 14
 
 /* Commands eligible for suggestion (cli.c excludes "help") */
 static const char *SUGGESTABLE_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
-    "add", "remove", "source", "shader", "tool", "doctor",
+    "source", "shader", "tool", "doctor",
     "self", "deps", "catalog",
 };
-#define SUGGESTABLE_COMMAND_COUNT 15
+#define SUGGESTABLE_COMMAND_COUNT 13
 
 /* Compute the suggestion threshold matching cli.c logic */
 static int cli_suggest_threshold(const char *input) {
@@ -1174,8 +1159,6 @@ static const struct { const char* name; CdoCommand cmd; } GEN_COMMANDS[] = {
     { "clean",   CDO_CMD_CLEAN   },
     { "new",     CDO_CMD_NEW     },
     { "init",    CDO_CMD_INIT    },
-    { "add",     CDO_CMD_ADD     },
-    { "remove",  CDO_CMD_REMOVE  },
     { "source",  CDO_CMD_SOURCE  },
     { "shader",  CDO_CMD_SHADER  },
     { "tool",    CDO_CMD_TOOL    },
@@ -1282,17 +1265,15 @@ alloc_cli_invocation(struct theft *t, void *env, void **output) {
     }
 
     /* Determine expected log level considering verbose/quiet/log-level interaction.
-     * The parser processes args left to right:
+     * Post-parse fixup: --quiet ALWAYS wins (Req 6.4), forcing log_level = ERROR.
+     * If --quiet is not set:
+     * - --log-level=X → log_level = X (explicit always wins over --verbose)
      * - --verbose → log_level = DEBUG
-     * - --quiet → log_level = ERROR
-     * - --log-level=X → log_level = X
-     * In our option array order, verbose comes first, then quiet, then log-level.
-     * So if log-level is specified it always wins (comes last).
-     * Otherwise quiet wins over verbose (comes after). */
-    if (log_choice > 0) {
-        inv->expected_log_level = LOG_LEVEL_ENUMS[log_choice - 1];
-    } else if (inv->expect_quiet) {
+     * - default → log_level = INFO */
+    if (inv->expect_quiet) {
         inv->expected_log_level = CDO_LOG_ERROR;
+    } else if (log_choice > 0) {
+        inv->expected_log_level = LOG_LEVEL_ENUMS[log_choice - 1];
     } else if (inv->expect_verbose) {
         inv->expected_log_level = CDO_LOG_DEBUG;
     } else {
@@ -3533,7 +3514,7 @@ prop_archive_structure_preservation(struct theft *t, void *arg1) {
             full_path[fplen - 1] = '\0';
         }
 
-        if (pal_path_exists(full_path) == 0) {
+        if (pal_path_exists(full_path) != 0) {
             fprintf(stderr, "  FAIL: expected path does not exist: '%s'\n", full_path);
             cleanup_temp_dir(tmp_dir);
             return THEFT_TRIAL_FAIL;

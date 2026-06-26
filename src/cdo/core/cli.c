@@ -15,8 +15,7 @@ static const CommandEntry command_table[] = {
     { "clean",   CDO_CMD_CLEAN   },
     { "new",     CDO_CMD_NEW     },
     { "init",    CDO_CMD_INIT    },
-    { "add",     CDO_CMD_ADD     },
-    { "remove",  CDO_CMD_REMOVE  },
+
     { "source",  CDO_CMD_SOURCE  },
     { "shader",  CDO_CMD_SHADER  },
     { "tool",    CDO_CMD_TOOL    },
@@ -190,6 +189,11 @@ int cdo_cli_parse(int argc, char** argv, CdoOptions* opts) {
                 }
                 continue;
             }
+            // --coverage
+            if (strcmp(arg, "--coverage") == 0) {
+                opts->coverage = true;
+                continue;
+            }
             // --dev
             if (strcmp(arg, "--dev") == 0) {
                 opts->dev = true;
@@ -238,6 +242,11 @@ int cdo_cli_parse(int argc, char** argv, CdoOptions* opts) {
     opts->positional_args  = positional_count > 0 ? positional_buf : NULL;
     opts->argc_rest        = rest_count;
     opts->argv_rest        = rest_count > 0 ? rest_buf : NULL;
+
+    // --quiet takes precedence over --verbose (Req 6.4)
+    if (opts->quiet) {
+        opts->log_level = CDO_LOG_ERROR;
+    }
 
     return 0;
 
@@ -407,47 +416,6 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "Examples:\n"
             "  cdo init               Initialize with default template\n"
             "  cdo init lib           Initialize as a library\n"
-        );
-        break;
-
-    case CDO_CMD_ADD:
-        fprintf(out,
-            "Add a dependency\n"
-            "\n"
-            "Usage: cdo add [OPTIONS] <PACKAGE> [VERSION]\n"
-            "\n"
-            "Arguments:\n"
-            "  <PACKAGE>   Package name to add\n"
-            "  [VERSION]   Version constraint (default: latest)\n"
-            "\n"
-            "Options:\n"
-            "      --git URL          Add from a Git repository\n"
-            "      --path PATH        Add from a local path\n"
-            "      --branch BRANCH    Git branch (with --git)\n"
-            "      --tag TAG          Git tag (with --git)\n"
-            "  -h, --help             Print help information\n"
-            "\n"
-            "Examples:\n"
-            "  cdo add sdl3           Add latest version from registry\n"
-            "  cdo add sdl3 3.4.10    Add a specific version\n"
-            "  cdo add --git https://github.com/user/lib --tag v1.0\n"
-        );
-        break;
-
-    case CDO_CMD_REMOVE:
-        fprintf(out,
-            "Remove a dependency\n"
-            "\n"
-            "Usage: cdo remove <PACKAGE>\n"
-            "\n"
-            "Arguments:\n"
-            "  <PACKAGE>   Package name to remove\n"
-            "\n"
-            "Options:\n"
-            "  -h, --help             Print help information\n"
-            "\n"
-            "Examples:\n"
-            "  cdo remove sdl3        Remove a dependency\n"
         );
         break;
 

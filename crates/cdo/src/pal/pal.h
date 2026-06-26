@@ -13,6 +13,7 @@ extern "C" {
 // PAL functions return 0 on success, non-zero on failure.
 #define PAL_OK            0
 #define PAL_ERR_IO        1
+#define PAL_ERR_TIMEOUT   2
 #define PAL_ERR_NOT_FOUND 9
 
 // --- Process Spawning ---
@@ -23,6 +24,7 @@ typedef struct {
     const char**    env;        // NULL = inherit
     const char*     cwd;        // NULL = inherit
     bool            capture_output;
+    int             timeout_ms; // 0 = use default (120000ms), -1 = no timeout
 } PalSpawnOpts;
 
 typedef struct {
@@ -49,6 +51,9 @@ int pal_file_write(const char* path, const char* buf, size_t len);
 int pal_cpu_count(void);
 int pal_get_home_dir(char* buf, size_t buf_size);
 int pal_is_tty(int fd);
+
+/// Returns current monotonic time in milliseconds.
+uint64_t pal_time_ms(void);
 
 // --- Path Utilities ---
 

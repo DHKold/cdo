@@ -28,6 +28,8 @@ typedef struct {
     int*            dev_dep_indices; // indices into workspace crate array (dev-only deps)
     char**          link_libs;      // platform link libraries (e.g., "winhttp", "pthread")
     int             link_lib_count;
+    char**          defines;        // crate-level defines from [build].defines
+    int             define_count;
 } Crate;
 
 // --- Workspace ---

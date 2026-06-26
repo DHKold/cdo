@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <time.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -15,6 +16,13 @@
 static CdoLogLevel s_log_level  = CDO_LOG_INFO;
 static bool        s_use_color  = false;
 static bool        s_is_tty     = false;
+static bool        s_quiet      = false;
+static ProgressBar* s_active_bar = NULL;
+
+// --- Forward declarations for progress bar helpers ---
+static void progress_render(const ProgressBar* bar, int completed);
+static void progress_erase(void);
+static void progress_rerender(void);
 
 // --- Test instrumentation ---
 #ifdef CDO_TESTING
@@ -32,12 +40,57 @@ void output_test_reset_emit_count(void) {
 // --- ANSI escape sequences ---
 #define ANSI_RED     "\033[31m"
 #define ANSI_YELLOW  "\033[33m"
-#define ANSI_GREEN   "\033[32m"
+#define ANSI_GREY    "\033[90m"
 #define ANSI_RESET   "\033[0m"
+
+// --- Timestamp formatting ---
+#define TIMESTAMP_BUF_SIZE 24
+
+// Internal helper - writes "[YYYY-MM-DD HH:MM:SS] " into buf (at least TIMESTAMP_BUF_SIZE bytes)
+static void format_timestamp(char* buf, size_t buf_size) {
+    static const char placeholder[] = "[0000-00-00 00:00:00] ";
+
+    if (buf_size < TIMESTAMP_BUF_SIZE) {
+        if (buf_size > 0) {
+            buf[0] = '\0';
+        }
+        return;
+    }
+
+    time_t now = time(NULL);
+    if (now == (time_t)-1) {
+        memcpy(buf, placeholder, sizeof(placeholder));
+        return;
+    }
+
+    struct tm tm_buf;
+#ifdef _WIN32
+    if (localtime_s(&tm_buf, &now) != 0) {
+        memcpy(buf, placeholder, sizeof(placeholder));
+        return;
+    }
+#else
+    if (localtime_r(&now, &tm_buf) == NULL) {
+        memcpy(buf, placeholder, sizeof(placeholder));
+        return;
+    }
+#endif
+
+    size_t written = strftime(buf, buf_size, "[%Y-%m-%d %H:%M:%S] ", &tm_buf);
+    if (written == 0) {
+        memcpy(buf, placeholder, sizeof(placeholder));
+    }
+}
+
+// --- Level labels (5-char padded for aligned output) ---
+static const char* level_labels[] = {
+    "ERROR", "WARN ", "INFO ", "DEBUG", "TRACE"
+};
 
 void output_init(CdoColorMode mode, CdoLogLevel level, bool is_tty) {
     s_log_level = level;
     s_is_tty    = is_tty;
+    s_quiet     = (level == CDO_LOG_ERROR);
 
     switch (mode) {
         case CDO_COLOR_ALWAYS:
@@ -89,7 +142,17 @@ void output_log(CdoLogLevel level, const char* fmt, ...) {
     // Choose output stream: ERROR and WARN go to stderr, others to stdout
     FILE* stream = (level <= CDO_LOG_WARN) ? stderr : stdout;
 
-    // Emit color prefix if colors are active
+    // If progress bar is active on a TTY, erase it before logging
+    if (s_active_bar && s_is_tty) {
+        progress_erase();
+    }
+
+    // Print timestamp
+    char ts_buf[TIMESTAMP_BUF_SIZE];
+    format_timestamp(ts_buf, sizeof(ts_buf));
+    fputs(ts_buf, stream);
+
+    // Emit color prefix if colors are active (wraps level label only)
     if (s_use_color) {
         switch (level) {
             case CDO_LOG_ERROR:
@@ -100,7 +163,7 @@ void output_log(CdoLogLevel level, const char* fmt, ...) {
                 break;
             case CDO_LOG_DEBUG:
             case CDO_LOG_TRACE:
-                fputs(ANSI_GREEN, stream);
+                fputs(ANSI_GREY, stream);
                 break;
             case CDO_LOG_INFO:
             default:
@@ -109,21 +172,32 @@ void output_log(CdoLogLevel level, const char* fmt, ...) {
         }
     }
 
-    // Print the actual message
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(stream, fmt, args);
-    va_end(args);
+    // Print level label (5-char padded)
+    fputs(level_labels[level], stream);
 
-    // Reset color after message
+    // Reset color after level label
     if (s_use_color) {
         if (level != CDO_LOG_INFO) {
             fputs(ANSI_RESET, stream);
         }
     }
 
+    // Space separator between level label and message
+    fputc(' ', stream);
+
+    // Print the actual message
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stream, fmt, args);
+    va_end(args);
+
     // Add newline
     fputc('\n', stream);
+
+    // Re-render progress bar after log message
+    if (s_active_bar && s_is_tty) {
+        progress_rerender();
+    }
 }
 
 bool output_use_color(void) {
@@ -149,6 +223,7 @@ struct ProgressBar {
     int     completed;
     bool    is_tty;
     int     last_milestone;  // index of last printed milestone (non-TTY)
+    bool    suppressed;      // true when quiet mode suppresses rendering
 };
 
 /// Render the progress bar line to stdout (TTY mode).
@@ -182,6 +257,19 @@ static void progress_render(const ProgressBar* bar, int completed) {
     fflush(stdout);
 }
 
+/// Erase the progress bar line (for log interleaving)
+static void progress_erase(void) {
+    fputs("\r\033[K", stdout);
+    fflush(stdout);
+}
+
+/// Re-render the active progress bar after a log line
+static void progress_rerender(void) {
+    if (s_active_bar) {
+        progress_render(s_active_bar, s_active_bar->completed);
+    }
+}
+
 ProgressBar* progress_create(const char* label, int total) {
     ProgressBar* bar = (ProgressBar*)malloc(sizeof(ProgressBar));
     if (!bar) {
@@ -200,14 +288,19 @@ ProgressBar* progress_create(const char* label, int total) {
     bar->completed      = 0;
     bar->is_tty         = s_is_tty;
     bar->last_milestone = -1;
+    bar->suppressed     = s_quiet;
 
-    // Print the initial progress line
-    if (bar->is_tty) {
-        progress_render(bar, 0);
-    } else {
-        // Non-TTY: print a start line
-        fprintf(stdout, "%s: 0/%d\n", bar->label, bar->total);
-        fflush(stdout);
+    s_active_bar = bar;
+
+    // Print the initial progress line (skip rendering when suppressed)
+    if (!bar->suppressed) {
+        if (bar->is_tty) {
+            progress_render(bar, 0);
+        } else {
+            // Non-TTY: print a start line
+            fprintf(stdout, "%s: 0/%d\n", bar->label, bar->total);
+            fflush(stdout);
+        }
     }
 
     return bar;
@@ -219,6 +312,10 @@ void progress_update(ProgressBar* bar, int completed) {
     }
 
     bar->completed = completed;
+
+    if (bar->suppressed) {
+        return;
+    }
 
     if (bar->is_tty) {
         // TTY: overwrite line with \r
@@ -241,6 +338,13 @@ void progress_update(ProgressBar* bar, int completed) {
 
 void progress_finish(ProgressBar* bar) {
     if (!bar) {
+        return;
+    }
+
+    s_active_bar = NULL;
+
+    if (bar->suppressed) {
+        free(bar);
         return;
     }
 
