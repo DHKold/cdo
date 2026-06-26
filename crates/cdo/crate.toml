@@ -1,6 +1,5 @@
 [crate]
 name = "cdo"
-type = "executable"
 c-standard = 17
 cpp-standard = 20
 
