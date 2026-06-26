@@ -1,4 +1,5 @@
 #include "core/workspace.h"
+#include "core/scanner.h"
 #include "core/toml.h"
 #include "core/output.h"
 #include "pal/pal.h"
@@ -564,8 +565,43 @@ int workspace_load(const char* root_path, Workspace* ws) {
 
     pathlist_free(&crate_dirs);
 
+    // Scan each crate for module directories (lib/, exe/, dyn/, tst/, api/).
+    // Module types are inferred from directory structure; the 'type' field in
+    // crate.toml is ignored when modules are found (Req 9.1, 9.2).
+    // Manifest settings (c-standard, cpp-standard, [dependencies], [build])
+    // already apply to the whole crate and thus to all modules (Req 9.3).
+    for (int i = 0; i < ws->crate_count; i++) {
+        char crate_abs[520];
+        if (pal_path_join(crate_abs, sizeof(crate_abs),
+                          ws->root_path, ws->crates[i].path) != 0) {
+            continue;
+        }
+
+        int scan_result = scanner_scan_modules(crate_abs, &ws->crates[i], NULL, 0);
+        if (scan_result != 0) {
+            // No module directories found (Req 1.7) — report a warning.
+            // The build can still proceed using the legacy src/ path, but
+            // the scanner has flagged the absence of a proper module layout.
+            cdo_warn("Crate '%s': no module directories found (lib/, exe/, dyn/, tst/, api/)",
+                     ws->crates[i].name);
+        } else {
+            cdo_debug("Crate '%s': discovered %d module(s)",
+                      ws->crates[i].name, ws->crates[i].module_count);
+        }
+    }
+
     // Resolve dependency name references to crate indices
     resolve_dep_indices(ws);
+
+    // Validate inter-crate module dependencies (Req 7.1-7.6):
+    // - Target crates must have a Library_Module
+    // - Transitive dependencies are resolved
+    // - Cycles are detected and reported
+    if (workspace_resolve_module_deps(ws) != 0) {
+        // Non-fatal at load time: errors have been reported via cdo_error().
+        // workspace_resolve() will also catch cycles during build order computation.
+        // Allow loading to continue so callers get a valid (but possibly unusable) workspace.
+    }
 
     return 0;
 }
@@ -816,6 +852,158 @@ int workspace_resolve(Workspace* ws, const char** crate_names, int count) {
 
     free(included);
     return 0;
+}
+
+// =============================================================================
+// workspace_resolve_module_deps — inter-crate module validation
+// =============================================================================
+
+/// BFS-based transitive dependency collector.
+/// Starting from crate at `start`, marks all transitively reachable crates
+/// in the `visited` array.  Uses `queue` as scratch space (must hold n ints).
+static void collect_transitive_deps(const Workspace* ws, int start,
+                                    bool* visited, int* queue) {
+    int n = ws->crate_count;
+    // Reset visited
+    for (int i = 0; i < n; i++) visited[i] = false;
+
+    int q_front = 0, q_back = 0;
+
+    // Seed BFS with direct dependencies of start
+    const Crate* root = &ws->crates[start];
+    for (int d = 0; d < root->dep_count; d++) {
+        int dep = root->dep_indices[d];
+        if (dep < 0 || dep >= n) continue;
+        if (!visited[dep]) {
+            visited[dep] = true;
+            queue[q_back++] = dep;
+        }
+    }
+
+    // BFS expansion
+    while (q_front < q_back) {
+        int cur = queue[q_front++];
+        const Crate* crate = &ws->crates[cur];
+        for (int d = 0; d < crate->dep_count; d++) {
+            int dep = crate->dep_indices[d];
+            if (dep < 0 || dep >= n) continue;
+            if (!visited[dep]) {
+                visited[dep] = true;
+                queue[q_back++] = dep;
+            }
+        }
+    }
+}
+
+int workspace_resolve_module_deps(Workspace* ws) {
+    if (!ws) return -1;
+    if (ws->crate_count == 0) return 0;
+
+    int n = ws->crate_count;
+    int errors = 0;
+
+    // --- Phase 1: Cycle detection ---
+    // Use DFS coloring: 0=white, 1=gray (in-stack), 2=black (done)
+    int* color = (int*)calloc((size_t)n, sizeof(int));
+    int* parent = (int*)malloc((size_t)n * sizeof(int));
+    int* cycle_path = (int*)malloc((size_t)(n + 1) * sizeof(int));
+    int cycle_len = 0;
+
+    if (!color || !parent || !cycle_path) {
+        free(color);
+        free(parent);
+        free(cycle_path);
+        return -1;
+    }
+
+    memset(parent, -1, (size_t)n * sizeof(int));
+
+    for (int i = 0; i < n; i++) {
+        if (color[i] == 0) {
+            if (dfs_find_cycle(ws, i, color, parent, cycle_path, &cycle_len, NULL)) {
+                // Report the cycle
+                char cycle_msg[1024];
+                int offset = 0;
+                for (int j = cycle_len - 1; j >= 0; j--) {
+                    int ci = cycle_path[j];
+                    int written = snprintf(cycle_msg + offset,
+                                           sizeof(cycle_msg) - (size_t)offset,
+                                           "%s%s",
+                                           ws->crates[ci].name,
+                                           (j > 0) ? " -> " : "");
+                    if (written > 0) offset += written;
+                    if ((size_t)offset >= sizeof(cycle_msg) - 1) break;
+                }
+                cdo_error("Circular dependency detected: %s", cycle_msg);
+                errors++;
+                break; // One cycle report is sufficient
+            }
+        }
+    }
+
+    free(color);
+    free(parent);
+    free(cycle_path);
+
+    if (errors > 0) return -1;
+
+    // --- Phase 2: Validate library module presence for dependencies ---
+    for (int i = 0; i < n; i++) {
+        const Crate* crate = &ws->crates[i];
+        if (crate->dep_count == 0) continue;
+
+        for (int d = 0; d < crate->dep_count; d++) {
+            int dep_idx = crate->dep_indices[d];
+            if (dep_idx < 0 || dep_idx >= n) continue;
+
+            const Crate* dep_crate = &ws->crates[dep_idx];
+
+            // If the target crate has module directories but no library module,
+            // that's an error. Legacy crates (no modules) are skipped.
+            if (dep_crate->module_count > 0 && !dep_crate->has_lib) {
+                cdo_error("Crate '%s' depends on '%s' which has no library module (lib/)",
+                          crate->name, dep_crate->name);
+                errors++;
+            }
+        }
+    }
+
+    if (errors > 0) return -1;
+
+    // --- Phase 3: Resolve transitive dependencies ---
+    // For each crate, compute transitive closure and validate that all
+    // transitive dependencies with modules have a library module.
+    bool* visited = (bool*)calloc((size_t)n, sizeof(bool));
+    int* queue = (int*)malloc((size_t)n * sizeof(int));
+
+    if (!visited || !queue) {
+        free(visited);
+        free(queue);
+        return -1;
+    }
+
+    for (int i = 0; i < n; i++) {
+        const Crate* crate = &ws->crates[i];
+        if (crate->dep_count == 0) continue;
+
+        collect_transitive_deps(ws, i, visited, queue);
+
+        // Validate all transitive deps that have modules also have a library
+        for (int j = 0; j < n; j++) {
+            if (!visited[j]) continue;
+            const Crate* trans_dep = &ws->crates[j];
+            if (trans_dep->module_count > 0 && !trans_dep->has_lib) {
+                cdo_error("Crate '%s' transitively depends on '%s' which has no library module (lib/)",
+                          crate->name, trans_dep->name);
+                errors++;
+            }
+        }
+    }
+
+    free(visited);
+    free(queue);
+
+    return (errors > 0) ? -1 : 0;
 }
 
 void workspace_free(Workspace* ws) {

@@ -1,7 +1,9 @@
 #ifndef CDO_CORE_WORKSPACE_H
 #define CDO_CORE_WORKSPACE_H
 
+#include <stdbool.h>
 #include <stddef.h>
+#include "module.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,12 +18,20 @@ typedef enum {
 } CrateType;
 
 // --- Crate ---
-typedef struct {
+typedef struct Crate {
     char            name[64];
     char            path[260];      // relative to workspace root
-    CrateType       type;
+    CrateType       type;           // DEPRECATED: ignored, kept for backward compat. Use modules[] instead.
     int             c_standard;     // 11, 17, 23
     int             cpp_standard;   // 17, 20, 23
+
+    // Module layout (replaces CrateType)
+    Module          modules[5];     // indexed by ModuleKind
+    int             module_count;   // number of present modules (1-5)
+    bool            has_lib;        // shortcut: modules[MODULE_LIB].present
+    bool            has_api;        // shortcut: modules[MODULE_API].present
+
+    // Dependencies (unchanged)
     int             dep_count;
     int*            dep_indices;    // indices into workspace crate array
     int             dev_dep_count;
@@ -33,7 +43,7 @@ typedef struct {
 } Crate;
 
 // --- Workspace ---
-typedef struct {
+typedef struct Workspace {
     char            root_path[260];
     int             crate_count;
     Crate*          crates;
@@ -51,6 +61,12 @@ int workspace_load(const char* root_path, Workspace* ws);
 /// If crate_names is NULL or count is 0, resolves all crates.
 /// Returns 0 on success, non-zero on error (e.g., circular dependency).
 int workspace_resolve(Workspace* ws, const char** crate_names, int count);
+
+/// Resolve inter-crate module dependencies.
+/// Validates that target crates of dependencies have a Library_Module,
+/// resolves transitive dependencies, and detects cycles.
+/// Returns 0 on success, non-zero on error.
+int workspace_resolve_module_deps(Workspace* ws);
 
 /// Free all workspace resources (crates array, dep_indices, build_order).
 void workspace_free(Workspace* ws);

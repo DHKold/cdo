@@ -34,7 +34,7 @@ $CppFlags   = @("-std=c++20", "-Wall", "-Wextra")
 $LinkLibs   = @("-lwinhttp")
 
 # --- Source Directories ---
-$CdoSrc     = Join-Path $Root "src\cdo"
+$CdoSrc     = Join-Path $Root "crates\cdo\src"
 $TestSrc    = Join-Path $Root "tests"
 
 # --- Clean ---

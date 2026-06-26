@@ -1,4 +1,5 @@
 #include "scanner.h"
+#include "workspace.h"
 #include "pal/pal.h"
 
 #include <stdlib.h>
@@ -136,6 +137,11 @@ static bool is_source_ext(const char* ext) {
             strcmp(ext, ".cpp") == 0 ||
             strcmp(ext, ".h") == 0 ||
             strcmp(ext, ".hpp") == 0);
+}
+
+static bool is_compilable_ext(const char* ext) {
+    return (strcmp(ext, ".c") == 0 ||
+            strcmp(ext, ".cpp") == 0);
 }
 
 static bool is_header_ext(const char* ext) {
@@ -302,6 +308,170 @@ int scanner_scan_headers(const char* crate_path, FileList* out) {
 
     if (walk_result != PAL_OK || ctx.error) {
         filelist_free(out);
+        return 1;
+    }
+
+    return 0;
+}
+
+// --- Module source scanning ---
+
+/**
+ * Callback for module source scanning.
+ * Uses the module directory as the base for relative path computation
+ * when applying exclude patterns.
+ */
+static void module_scan_callback(const char* entry_path, bool is_dir, void* ctx) {
+    ScanContext* sc = (ScanContext*)ctx;
+    if (sc->error) return;
+    if (is_dir) return;
+
+    // Normalize the entry path for consistent matching
+    size_t entry_len = strlen(entry_path);
+    char* normalized = (char*)malloc(entry_len + 1);
+    if (!normalized) { sc->error = 1; return; }
+    memcpy(normalized, entry_path, entry_len + 1);
+    pal_path_normalize(normalized);
+
+    // Check extension
+    const char* ext = pal_path_ext(normalized);
+    bool ext_match = sc->check_sources ? is_compilable_ext(ext) : is_header_ext(ext);
+    if (!ext_match) {
+        free(normalized);
+        return;
+    }
+
+    // Compute relative path from the module directory root for exclude pattern matching
+    if (sc->exclude_count > 0 && sc->base_len > 0) {
+        const char* rel = normalized;
+        // Skip past module_dir prefix (stored in base_path/base_len)
+        if (strlen(normalized) > sc->base_len &&
+            (normalized[sc->base_len] == '/' || normalized[sc->base_len] == '\\')) {
+            rel = normalized + sc->base_len + 1;
+        }
+        if (matches_any_exclude(rel, sc->exclude_patterns, sc->exclude_count)) {
+            free(normalized);
+            return;
+        }
+    }
+
+    // Add to the file list
+    if (filelist_add(sc->out, normalized) != 0) {
+        sc->error = 1;
+    }
+    free(normalized);
+}
+
+int scanner_scan_module_sources(const char* module_dir, int kind,
+                                const char** exclude_patterns,
+                                int exclude_count, FileList* out) {
+    if (!module_dir || !out) return 1;
+
+    if (filelist_init(out) != 0) return 1;
+
+    // Normalize module_dir for consistent prefix stripping
+    size_t module_dir_len = strlen(module_dir);
+    char* norm_dir = (char*)malloc(module_dir_len + 1);
+    if (!norm_dir) { filelist_free(out); return 1; }
+    memcpy(norm_dir, module_dir, module_dir_len + 1);
+    pal_path_normalize(norm_dir);
+    // Strip trailing slash if present
+    size_t norm_dir_len = strlen(norm_dir);
+    while (norm_dir_len > 0 && norm_dir[norm_dir_len - 1] == '/') {
+        norm_dir[--norm_dir_len] = '\0';
+    }
+
+    // Check if the module directory exists
+    if (pal_path_exists(norm_dir) != 0) {
+        // Directory doesn't exist — return empty list (not an error)
+        free(norm_dir);
+        return 0;
+    }
+
+    // For MODULE_API, scan for headers only; for all other kinds, scan for
+    // compilable source files (.c, .cpp).
+    bool scan_compilable = (kind != MODULE_API);
+
+    ScanContext ctx = {
+        .out = out,
+        .base_path = norm_dir,
+        .base_len = norm_dir_len,
+        .crate_path = norm_dir,
+        .crate_len = norm_dir_len,
+        .exclude_patterns = exclude_patterns,
+        .exclude_count = exclude_count,
+        .check_sources = scan_compilable,
+        .error = 0,
+    };
+
+    int walk_result = pal_dir_walk(norm_dir, module_scan_callback, &ctx);
+    free(norm_dir);
+
+    if (walk_result != PAL_OK || ctx.error) {
+        filelist_free(out);
+        return 1;
+    }
+
+    return 0;
+}
+
+// --- Module scanning ---
+
+/// Well-known module directory names, indexed by ModuleKind.
+static const char* MODULE_DIR_NAMES[MODULE_KIND_COUNT] = {
+    "lib",  // MODULE_LIB
+    "exe",  // MODULE_EXE
+    "dyn",  // MODULE_DYN
+    "tst",  // MODULE_TST
+    "api",  // MODULE_API
+};
+
+int scanner_scan_modules(const char* crate_path, Crate* crate,
+                         const char** exclude_patterns, int exclude_count) {
+    if (!crate_path || !crate) return 1;
+
+    (void)exclude_patterns;
+    (void)exclude_count;
+
+    int module_count = 0;
+
+    for (int i = 0; i < MODULE_KIND_COUNT; i++) {
+        // Build path: <crate_path>/<module_dir_name>
+        char dir_path[260];
+        if (pal_path_join(dir_path, sizeof(dir_path), crate_path, MODULE_DIR_NAMES[i]) != 0) {
+            return 1;
+        }
+        pal_path_normalize(dir_path);
+
+        // Check if the directory exists
+        if (pal_path_exists(dir_path) == 0) {
+            crate->modules[i].kind = (ModuleKind)i;
+            crate->modules[i].present = true;
+            memcpy(crate->modules[i].dir_path, dir_path, strlen(dir_path) + 1);
+            // Initialize sources to empty
+            crate->modules[i].sources.paths = NULL;
+            crate->modules[i].sources.count = 0;
+            crate->modules[i].sources.capacity = 0;
+            // artifact_path left empty for now (computed during build)
+            crate->modules[i].artifact_path[0] = '\0';
+            module_count++;
+        } else {
+            crate->modules[i].kind = (ModuleKind)i;
+            crate->modules[i].present = false;
+            crate->modules[i].dir_path[0] = '\0';
+            crate->modules[i].sources.paths = NULL;
+            crate->modules[i].sources.count = 0;
+            crate->modules[i].sources.capacity = 0;
+            crate->modules[i].artifact_path[0] = '\0';
+        }
+    }
+
+    crate->module_count = module_count;
+    crate->has_lib = crate->modules[MODULE_LIB].present;
+    crate->has_api = crate->modules[MODULE_API].present;
+
+    // Error if no module directories found
+    if (module_count == 0) {
         return 1;
     }
 

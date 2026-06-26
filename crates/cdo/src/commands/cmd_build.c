@@ -2,6 +2,7 @@
 #include "core/workspace.h"
 #include "core/compiler.h"
 #include "core/scanner.h"
+#include "core/module.h"
 #include "core/toml.h"
 #include "core/output.h"
 #include "core/deps.h"
@@ -368,6 +369,1838 @@ static int deploy_catalog_files(const char* ws_root, const char* build_dir) {
 }
 
 // ---------------------------------------------------------------------------
+// Library Module compilation
+// ---------------------------------------------------------------------------
+
+/// Build the Library_Module for a crate: compile all .c/.cpp files in lib/
+/// into object files placed in build/<profile>/<crate_name>/lib/, then archive
+/// them into a static library artifact at build/<profile>/<crate_name>/<artifact>.
+///
+/// Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 8.1, 11.1, 11.2
+///
+/// @param ws           The workspace
+/// @param crate        The crate containing the library module (must have has_lib == true)
+/// @param compiler     Detected compiler info
+/// @param profile      Active build profile name (e.g., "debug", "release")
+/// @param build_prof   Loaded build profile settings
+/// @param jobs         Parallelism level for compilation
+/// @param coverage_flags   Coverage flags array (or NULL)
+/// @param coverage_flag_count  Number of coverage flags
+/// @param progress     Progress bar (may be NULL)
+/// @param completed_units  Pointer to completed unit counter (updated in place)
+/// @return 0 on success, non-zero on failure
+static int build_library_module(const Workspace* ws, Crate* crate,
+                                const CompilerInfo* compiler,
+                                const char* profile,
+                                const BuildProfile* build_prof,
+                                int jobs,
+                                const char** coverage_flags,
+                                int coverage_flag_count,
+                                ProgressBar* progress,
+                                int* completed_units) {
+    if (!crate->has_lib) return 0; // Nothing to do
+
+    Module* lib_mod = &crate->modules[MODULE_LIB];
+
+    // --- Scan lib/ for source files ---
+    FileList sources = {0};
+    int rc = scanner_scan_module_sources(lib_mod->dir_path, MODULE_LIB, NULL, 0, &sources);
+    if (rc != 0) {
+        cdo_error("failed to scan lib/ sources for crate '%s'", crate->name);
+        return 1;
+    }
+
+    // Filter to compilable sources only
+    int compilable_count = 0;
+    for (int s = 0; s < sources.count; s++) {
+        const char* ext = pal_path_ext(sources.paths[s]);
+        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+            compilable_count++;
+        }
+    }
+
+    // Req 2.5: If lib/ has no compilable source files, report error and halt
+    if (compilable_count == 0) {
+        cdo_error("crate '%s': lib/ module has no compilable source files (.c or .cpp)",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // --- Create object output directory: build/<profile>/<crate_name>/lib/ ---
+    char build_dir[260];
+    build_dir_for_crate(ws, crate, profile, build_dir, sizeof(build_dir));
+
+    char lib_obj_dir[260];
+    char lib_artifact_path[260];
+    int apath_rc = module_compute_artifact_path(ws->root_path, crate->name,
+                                                MODULE_LIB, profile,
+                                                lib_artifact_path, sizeof(lib_artifact_path),
+                                                lib_obj_dir, sizeof(lib_obj_dir));
+    if (apath_rc != 0) {
+        cdo_error("failed to compute artifact path for lib/ module in crate '%s'",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // --- Resolve include paths for the library module ---
+    char** inc_paths = NULL;
+    int inc_count = 0;
+    rc = module_include_paths(crate, MODULE_LIB, ws, &inc_paths, &inc_count);
+    if (rc != 0) {
+        cdo_error("failed to compute include paths for lib/ module in crate '%s'",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // Build const char** from the returned paths for CompileJob
+    const char** all_includes = (const char**)malloc((inc_count + 1) * sizeof(const char*));
+    if (!all_includes) {
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+    for (int i = 0; i < inc_count; i++) {
+        all_includes[i] = inc_paths[i];
+    }
+
+    // --- Compute dirty set (incremental build) ---
+    int* compilable_indices = (int*)malloc(sizeof(int) * sources.count);
+    if (!compilable_indices) {
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    int ci = 0;
+    for (int s = 0; s < sources.count; s++) {
+        const char* ext = pal_path_ext(sources.paths[s]);
+        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+            compilable_indices[ci++] = s;
+        }
+    }
+
+    int* dirty_indices = (int*)malloc(sizeof(int) * compilable_count);
+    int dirty_count = 0;
+    if (!dirty_indices) {
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    for (int i = 0; i < compilable_count; i++) {
+        int src_idx = compilable_indices[i];
+        const char* src_path = sources.paths[src_idx];
+
+        char obj_path[260];
+        object_path_from_source(src_path, lib_obj_dir, obj_path, sizeof(obj_path));
+
+        uint64_t src_mtime = 0, obj_mtime = 0;
+        bool needs_rebuild = true;
+
+        if (pal_file_mtime(src_path, &src_mtime) == 0 &&
+            pal_file_mtime(obj_path, &obj_mtime) == 0) {
+            if (obj_mtime >= src_mtime) {
+                needs_rebuild = false;
+            }
+        }
+
+        if (needs_rebuild) {
+            dirty_indices[dirty_count++] = src_idx;
+        }
+    }
+
+    // --- Compile dirty sources ---
+    if (dirty_count > 0) {
+        cdo_info("Compiling lib/ module for crate '%s' (%d files)", crate->name, dirty_count);
+
+        // Merge crate-level defines with profile defines
+        int merged_define_count = build_prof->define_count + crate->define_count;
+        const char** merged_defines = NULL;
+        if (merged_define_count > 0) {
+            merged_defines = (const char**)malloc(sizeof(const char*) * (size_t)merged_define_count);
+            if (merged_defines) {
+                int di = 0;
+                for (int d = 0; d < build_prof->define_count; d++) {
+                    merged_defines[di++] = build_prof->defines[d];
+                }
+                for (int d = 0; d < crate->define_count; d++) {
+                    merged_defines[di++] = crate->defines[d];
+                }
+            } else {
+                merged_define_count = 0;
+            }
+        }
+
+        CompileJob* compile_jobs = (CompileJob*)calloc(dirty_count, sizeof(CompileJob));
+        char** obj_paths = (char**)calloc(dirty_count, sizeof(char*));
+        if (!compile_jobs || !obj_paths) {
+            cdo_error("out of memory allocating compile jobs for lib/ module");
+            free(compile_jobs);
+            free(obj_paths);
+            free(merged_defines);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+
+        for (int d = 0; d < dirty_count; d++) {
+            int src_idx = dirty_indices[d];
+            const char* src_path = sources.paths[src_idx];
+
+            obj_paths[d] = (char*)malloc(260);
+            if (!obj_paths[d]) {
+                cdo_error("out of memory");
+                for (int x = 0; x < d; x++) free(obj_paths[x]);
+                free(obj_paths);
+                free(compile_jobs);
+                free(merged_defines);
+                free(dirty_indices);
+                free(compilable_indices);
+                free(all_includes);
+                for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+                free(inc_paths);
+                filelist_free(&sources);
+                return 1;
+            }
+            object_path_from_source(src_path, lib_obj_dir, obj_paths[d], 260);
+
+            compile_jobs[d].source_path = src_path;
+            compile_jobs[d].object_path = obj_paths[d];
+            compile_jobs[d].include_paths = all_includes;
+            compile_jobs[d].include_path_count = inc_count;
+            compile_jobs[d].optimize = build_prof->optimize;
+            compile_jobs[d].debug_info = build_prof->debug_info;
+            compile_jobs[d].defines = merged_defines;
+            compile_jobs[d].define_count = merged_define_count;
+
+            // Apply profile extra flags + coverage flags
+            {
+                int total_extra = build_prof->extra_flag_count + coverage_flag_count;
+                if (total_extra > 0) {
+                    static const char* merged_extra_flags[BUILD_PROFILE_MAX_FLAGS + 2];
+                    int mf = 0;
+                    for (int f = 0; f < build_prof->extra_flag_count; f++) {
+                        merged_extra_flags[mf++] = build_prof->extra_flags[f];
+                    }
+                    for (int f = 0; f < coverage_flag_count; f++) {
+                        merged_extra_flags[mf++] = coverage_flags[f];
+                    }
+                    compile_jobs[d].extra_flags = merged_extra_flags;
+                    compile_jobs[d].extra_flag_count = total_extra;
+                } else {
+                    compile_jobs[d].extra_flags = NULL;
+                    compile_jobs[d].extra_flag_count = 0;
+                }
+            }
+
+            // Set language standard based on file type
+            if (is_cpp_source(src_path)) {
+                compile_jobs[d].c_standard = NULL;
+                compile_jobs[d].cpp_standard = cpp_standard_str(crate->cpp_standard);
+            } else {
+                compile_jobs[d].c_standard = c_standard_str(crate->c_standard);
+                compile_jobs[d].cpp_standard = NULL;
+            }
+        }
+
+        // Execute compilation batch
+        rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs);
+
+        for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
+        free(obj_paths);
+        free(compile_jobs);
+        free(merged_defines);
+
+        if (rc != 0) {
+            cdo_error("compilation failed for lib/ module in crate '%s'", crate->name);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+    } else {
+        cdo_info("crate '%s' lib/ module is up to date", crate->name);
+    }
+
+    // Update progress
+    if (progress && completed_units) {
+        *completed_units += compilable_count;
+        progress_update(progress, *completed_units);
+    }
+
+    // --- Archive object files into static library ---
+    // Collect ALL object file paths (not just dirty ones) for the archive
+    const char** archive_obj_paths = (const char**)malloc(compilable_count * sizeof(const char*));
+    char** archive_obj_bufs = (char**)calloc(compilable_count, sizeof(char*));
+    if (!archive_obj_paths || !archive_obj_bufs) {
+        cdo_error("out of memory for archive step");
+        free(archive_obj_paths);
+        free(archive_obj_bufs);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    for (int i = 0; i < compilable_count; i++) {
+        int src_idx = compilable_indices[i];
+        archive_obj_bufs[i] = (char*)malloc(260);
+        if (!archive_obj_bufs[i]) {
+            for (int x = 0; x < i; x++) free(archive_obj_bufs[x]);
+            free(archive_obj_bufs);
+            free(archive_obj_paths);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int j = 0; j < inc_count; j++) free(inc_paths[j]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+        object_path_from_source(sources.paths[src_idx], lib_obj_dir,
+                                archive_obj_bufs[i], 260);
+        archive_obj_paths[i] = archive_obj_bufs[i];
+    }
+
+    // Artifact path already computed by module_compute_artifact_path above
+    char artifact_path[260];
+    strncpy(artifact_path, lib_artifact_path, sizeof(artifact_path) - 1);
+    artifact_path[sizeof(artifact_path) - 1] = '\0';
+
+    // Use compiler_link which handles static library archiving via ar/lib.exe
+    LinkJob link_job = {0};
+    link_job.object_paths = archive_obj_paths;
+    link_job.object_count = compilable_count;
+    link_job.output_path = artifact_path;
+    link_job.lib_paths = NULL;
+    link_job.lib_path_count = 0;
+    link_job.link_libs = NULL;
+    link_job.link_lib_count = 0;
+    link_job.shared = false;
+
+    cdo_info("Archiving lib/ module: %s", artifact_path);
+    rc = compiler_link(&link_job, compiler);
+
+    if (rc != 0) {
+        cdo_error("archiving failed for lib/ module in crate '%s'", crate->name);
+        for (int i = 0; i < compilable_count; i++) free(archive_obj_bufs[i]);
+        free(archive_obj_bufs);
+        free(archive_obj_paths);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // Store artifact path in the module struct for use by dependent modules
+    strncpy(lib_mod->artifact_path, artifact_path, sizeof(lib_mod->artifact_path) - 1);
+    lib_mod->artifact_path[sizeof(lib_mod->artifact_path) - 1] = '\0';
+
+    // Cleanup
+    for (int i = 0; i < compilable_count; i++) free(archive_obj_bufs[i]);
+    free(archive_obj_bufs);
+    free(archive_obj_paths);
+    free(dirty_indices);
+    free(compilable_indices);
+    free(all_includes);
+    for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+    free(inc_paths);
+    filelist_free(&sources);
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Executable Module compilation
+// ---------------------------------------------------------------------------
+
+/// Build the Executable_Module for a crate: compile all .c/.cpp files in exe/
+/// into object files placed in build/<profile>/<crate_name>/exe/, then link
+/// them (along with the library artifact and inter-crate deps) into an
+/// executable at build/<profile>/<crate_name>/<crate_name>.exe.
+///
+/// If no Library_Module exists, compiles as a standalone executable with only
+/// exe/ as an include path.
+///
+/// Requirements: 3.1, 3.2, 3.3, 3.4, 11.1, 11.3
+///
+/// @param ws           The workspace
+/// @param crate        The crate containing the executable module
+/// @param compiler     Detected compiler info
+/// @param profile      Active build profile name (e.g., "debug", "release")
+/// @param build_prof   Loaded build profile settings
+/// @param jobs         Parallelism level for compilation
+/// @param coverage_flags   Coverage flags array (or NULL)
+/// @param coverage_flag_count  Number of coverage flags
+/// @param progress     Progress bar (may be NULL)
+/// @param completed_units  Pointer to completed unit counter (updated in place)
+/// @return 0 on success, non-zero on failure
+static int build_executable_module(const Workspace* ws, Crate* crate,
+                                   const CompilerInfo* compiler,
+                                   const char* profile,
+                                   const BuildProfile* build_prof,
+                                   int jobs,
+                                   const char** coverage_flags,
+                                   int coverage_flag_count,
+                                   ProgressBar* progress,
+                                   int* completed_units) {
+    Module* exe_mod = &crate->modules[MODULE_EXE];
+    if (!exe_mod->present) return 0; // Nothing to do
+
+    // --- Scan exe/ for source files ---
+    FileList sources = {0};
+    int rc = scanner_scan_module_sources(exe_mod->dir_path, MODULE_EXE, NULL, 0, &sources);
+    if (rc != 0) {
+        cdo_error("failed to scan exe/ sources for crate '%s'", crate->name);
+        return 1;
+    }
+
+    // Filter to compilable sources only
+    int compilable_count = 0;
+    for (int s = 0; s < sources.count; s++) {
+        const char* ext = pal_path_ext(sources.paths[s]);
+        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+            compilable_count++;
+        }
+    }
+
+    if (compilable_count == 0) {
+        cdo_warn("crate '%s': exe/ module has no compilable source files", crate->name);
+        filelist_free(&sources);
+        return 0;
+    }
+
+    // --- Create object output directory: build/<profile>/<crate_name>/exe/ ---
+    char build_dir[260];
+    build_dir_for_crate(ws, crate, profile, build_dir, sizeof(build_dir));
+
+    char exe_obj_dir[260];
+    char exe_artifact_path[260];
+    int apath_rc = module_compute_artifact_path(ws->root_path, crate->name,
+                                                MODULE_EXE, profile,
+                                                exe_artifact_path, sizeof(exe_artifact_path),
+                                                exe_obj_dir, sizeof(exe_obj_dir));
+    if (apath_rc != 0) {
+        cdo_error("failed to compute artifact path for exe/ module in crate '%s'",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // --- Resolve include paths for the executable module ---
+    char** inc_paths = NULL;
+    int inc_count = 0;
+    rc = module_include_paths(crate, MODULE_EXE, ws, &inc_paths, &inc_count);
+    if (rc != 0) {
+        cdo_error("failed to compute include paths for exe/ module in crate '%s'",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // Build const char** from the returned paths for CompileJob
+    const char** all_includes = (const char**)malloc((inc_count + 1) * sizeof(const char*));
+    if (!all_includes) {
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+    for (int i = 0; i < inc_count; i++) {
+        all_includes[i] = inc_paths[i];
+    }
+
+    // --- Compute dirty set (incremental build) ---
+    int* compilable_indices = (int*)malloc(sizeof(int) * sources.count);
+    if (!compilable_indices) {
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    int ci = 0;
+    for (int s = 0; s < sources.count; s++) {
+        const char* ext = pal_path_ext(sources.paths[s]);
+        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+            compilable_indices[ci++] = s;
+        }
+    }
+
+    int* dirty_indices = (int*)malloc(sizeof(int) * compilable_count);
+    int dirty_count = 0;
+    if (!dirty_indices) {
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    for (int i = 0; i < compilable_count; i++) {
+        int src_idx = compilable_indices[i];
+        const char* src_path = sources.paths[src_idx];
+
+        char obj_path[260];
+        object_path_from_source(src_path, exe_obj_dir, obj_path, sizeof(obj_path));
+
+        uint64_t src_mtime = 0, obj_mtime = 0;
+        bool needs_rebuild = true;
+
+        if (pal_file_mtime(src_path, &src_mtime) == 0 &&
+            pal_file_mtime(obj_path, &obj_mtime) == 0) {
+            if (obj_mtime >= src_mtime) {
+                needs_rebuild = false;
+            }
+        }
+
+        if (needs_rebuild) {
+            dirty_indices[dirty_count++] = src_idx;
+        }
+    }
+
+    // --- Compile dirty sources ---
+    if (dirty_count > 0) {
+        cdo_info("Compiling exe/ module for crate '%s' (%d files)", crate->name, dirty_count);
+
+        // Merge crate-level defines with profile defines
+        int merged_define_count = build_prof->define_count + crate->define_count;
+        const char** merged_defines = NULL;
+        if (merged_define_count > 0) {
+            merged_defines = (const char**)malloc(sizeof(const char*) * (size_t)merged_define_count);
+            if (merged_defines) {
+                int di = 0;
+                for (int d = 0; d < build_prof->define_count; d++) {
+                    merged_defines[di++] = build_prof->defines[d];
+                }
+                for (int d = 0; d < crate->define_count; d++) {
+                    merged_defines[di++] = crate->defines[d];
+                }
+            } else {
+                merged_define_count = 0;
+            }
+        }
+
+        CompileJob* compile_jobs = (CompileJob*)calloc(dirty_count, sizeof(CompileJob));
+        char** obj_paths = (char**)calloc(dirty_count, sizeof(char*));
+        if (!compile_jobs || !obj_paths) {
+            cdo_error("out of memory allocating compile jobs for exe/ module");
+            free(compile_jobs);
+            free(obj_paths);
+            free(merged_defines);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+
+        for (int d = 0; d < dirty_count; d++) {
+            int src_idx = dirty_indices[d];
+            const char* src_path = sources.paths[src_idx];
+
+            obj_paths[d] = (char*)malloc(260);
+            if (!obj_paths[d]) {
+                cdo_error("out of memory");
+                for (int x = 0; x < d; x++) free(obj_paths[x]);
+                free(obj_paths);
+                free(compile_jobs);
+                free(merged_defines);
+                free(dirty_indices);
+                free(compilable_indices);
+                free(all_includes);
+                for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+                free(inc_paths);
+                filelist_free(&sources);
+                return 1;
+            }
+            object_path_from_source(src_path, exe_obj_dir, obj_paths[d], 260);
+
+            compile_jobs[d].source_path = src_path;
+            compile_jobs[d].object_path = obj_paths[d];
+            compile_jobs[d].include_paths = all_includes;
+            compile_jobs[d].include_path_count = inc_count;
+            compile_jobs[d].optimize = build_prof->optimize;
+            compile_jobs[d].debug_info = build_prof->debug_info;
+            compile_jobs[d].defines = merged_defines;
+            compile_jobs[d].define_count = merged_define_count;
+
+            // Apply profile extra flags + coverage flags
+            {
+                int total_extra = build_prof->extra_flag_count + coverage_flag_count;
+                if (total_extra > 0) {
+                    static const char* merged_extra_flags[BUILD_PROFILE_MAX_FLAGS + 2];
+                    int mf = 0;
+                    for (int f = 0; f < build_prof->extra_flag_count; f++) {
+                        merged_extra_flags[mf++] = build_prof->extra_flags[f];
+                    }
+                    for (int f = 0; f < coverage_flag_count; f++) {
+                        merged_extra_flags[mf++] = coverage_flags[f];
+                    }
+                    compile_jobs[d].extra_flags = merged_extra_flags;
+                    compile_jobs[d].extra_flag_count = total_extra;
+                } else {
+                    compile_jobs[d].extra_flags = NULL;
+                    compile_jobs[d].extra_flag_count = 0;
+                }
+            }
+
+            // Set language standard based on file type
+            if (is_cpp_source(src_path)) {
+                compile_jobs[d].c_standard = NULL;
+                compile_jobs[d].cpp_standard = cpp_standard_str(crate->cpp_standard);
+            } else {
+                compile_jobs[d].c_standard = c_standard_str(crate->c_standard);
+                compile_jobs[d].cpp_standard = NULL;
+            }
+        }
+
+        // Execute compilation batch
+        rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs);
+
+        for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
+        free(obj_paths);
+        free(compile_jobs);
+        free(merged_defines);
+
+        if (rc != 0) {
+            cdo_error("compilation failed for exe/ module in crate '%s'", crate->name);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+    } else {
+        cdo_info("crate '%s' exe/ module is up to date", crate->name);
+    }
+
+    // Update progress
+    if (progress && completed_units) {
+        *completed_units += compilable_count;
+        progress_update(progress, *completed_units);
+    }
+
+    // --- Link exe/ objects into executable ---
+    // Collect ALL object file paths (not just dirty ones) for linking
+    const char** link_obj_paths = (const char**)malloc(compilable_count * sizeof(const char*));
+    char** link_obj_bufs = (char**)calloc(compilable_count, sizeof(char*));
+    if (!link_obj_paths || !link_obj_bufs) {
+        cdo_error("out of memory for link step");
+        free(link_obj_paths);
+        free(link_obj_bufs);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    for (int i = 0; i < compilable_count; i++) {
+        int src_idx = compilable_indices[i];
+        link_obj_bufs[i] = (char*)malloc(260);
+        if (!link_obj_bufs[i]) {
+            for (int x = 0; x < i; x++) free(link_obj_bufs[x]);
+            free(link_obj_bufs);
+            free(link_obj_paths);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int j = 0; j < inc_count; j++) free(inc_paths[j]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+        object_path_from_source(sources.paths[src_idx], exe_obj_dir,
+                                link_obj_bufs[i], 260);
+        link_obj_paths[i] = link_obj_bufs[i];
+    }
+
+    // Collect libraries to link against:
+    // 1. Own crate's library artifact (if has_lib)
+    // 2. All dependency crates' library artifacts
+    // 3. Platform link_libs from crate manifest
+    const char* link_libs[192];
+    int link_lib_count = 0;
+    const char* lib_paths[64];
+    int lib_path_count = 0;
+
+    // If the crate has a Library_Module, link against it
+    if (crate->has_lib) {
+        Module* lib_mod = &crate->modules[MODULE_LIB];
+        if (lib_mod->artifact_path[0] != '\0') {
+            // Extract directory from the artifact path for -L
+            char lib_dir[260];
+            strncpy(lib_dir, lib_mod->artifact_path, sizeof(lib_dir) - 1);
+            lib_dir[sizeof(lib_dir) - 1] = '\0';
+            // Find last separator to get directory
+            char* last_sep = strrchr(lib_dir, '/');
+            char* last_bsep = strrchr(lib_dir, '\\');
+            if (last_bsep > last_sep) last_sep = last_bsep;
+            if (last_sep) *last_sep = '\0';
+
+            static char own_lib_dir[260];
+            strncpy(own_lib_dir, lib_dir, sizeof(own_lib_dir) - 1);
+            own_lib_dir[sizeof(own_lib_dir) - 1] = '\0';
+            lib_paths[lib_path_count++] = own_lib_dir;
+
+            // Add library name for -l (strip prefix/suffix)
+            static char own_lib_name[64];
+            strncpy(own_lib_name, crate->name, sizeof(own_lib_name) - 1);
+            own_lib_name[sizeof(own_lib_name) - 1] = '\0';
+            link_libs[link_lib_count++] = own_lib_name;
+        }
+    }
+
+    // Inter-crate dependency libraries
+    for (int d = 0; d < crate->dep_count; d++) {
+        int dep_idx = crate->dep_indices[d];
+        if (dep_idx < 0 || dep_idx >= ws->crate_count) continue;
+        Crate* dep_crate = &ws->crates[dep_idx];
+
+        if (dep_crate->has_lib && dep_crate->modules[MODULE_LIB].artifact_path[0] != '\0') {
+            // Extract directory from dep's artifact path
+            static char dep_lib_dirs[64][260];
+            strncpy(dep_lib_dirs[lib_path_count], dep_crate->modules[MODULE_LIB].artifact_path,
+                    sizeof(dep_lib_dirs[lib_path_count]) - 1);
+            dep_lib_dirs[lib_path_count][sizeof(dep_lib_dirs[lib_path_count]) - 1] = '\0';
+            char* last_sep = strrchr(dep_lib_dirs[lib_path_count], '/');
+            char* last_bsep = strrchr(dep_lib_dirs[lib_path_count], '\\');
+            if (last_bsep > last_sep) last_sep = last_bsep;
+            if (last_sep) *last_sep = '\0';
+            lib_paths[lib_path_count] = dep_lib_dirs[lib_path_count];
+            lib_path_count++;
+
+            // Add dep library name for -l
+            static char dep_lib_names[128][64];
+            strncpy(dep_lib_names[link_lib_count], dep_crate->name,
+                    sizeof(dep_lib_names[link_lib_count]) - 1);
+            dep_lib_names[link_lib_count][sizeof(dep_lib_names[link_lib_count]) - 1] = '\0';
+            link_libs[link_lib_count] = dep_lib_names[link_lib_count];
+            link_lib_count++;
+        }
+    }
+
+    // Platform link_libs from crate manifest
+    for (int l = 0; l < crate->link_lib_count && link_lib_count < 192; l++) {
+        link_libs[link_lib_count++] = crate->link_libs[l];
+    }
+
+    // Artifact path already computed by module_compute_artifact_path above
+    char artifact_path[260];
+    strncpy(artifact_path, exe_artifact_path, sizeof(artifact_path) - 1);
+    artifact_path[sizeof(artifact_path) - 1] = '\0';
+
+    // Determine if we need C++ linker based on sources
+    CompilerInfo link_compiler = *compiler;
+    for (int s = 0; s < sources.count; s++) {
+        if (is_cpp_source(sources.paths[s])) {
+            if (compiler->family == COMPILER_GCC) {
+                size_t plen = strlen(compiler->path);
+                if (plen >= 7 && strcmp(compiler->path + plen - 7, "gcc.exe") == 0) {
+                    strncpy(link_compiler.path, compiler->path, sizeof(link_compiler.path) - 1);
+                    link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                    strcpy(link_compiler.path + plen - 7, "g++.exe");
+                } else if (plen >= 3 && strcmp(compiler->path + plen - 3, "gcc") == 0) {
+                    strncpy(link_compiler.path, compiler->path, sizeof(link_compiler.path) - 1);
+                    link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                    strcpy(link_compiler.path + plen - 3, "g++");
+                } else if (strcmp(compiler->path, "cc") == 0) {
+                    strncpy(link_compiler.path, "c++", sizeof(link_compiler.path) - 1);
+                }
+            } else if (compiler->family == COMPILER_CLANG) {
+                size_t plen = strlen(compiler->path);
+                if (plen >= 9 && strcmp(compiler->path + plen - 9, "clang.exe") == 0) {
+                    strncpy(link_compiler.path, compiler->path, sizeof(link_compiler.path) - 1);
+                    link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                    strcpy(link_compiler.path + plen - 9, "clang++.exe");
+                } else if (plen >= 5 && strcmp(compiler->path + plen - 5, "clang") == 0) {
+                    strncpy(link_compiler.path, compiler->path, sizeof(link_compiler.path) - 1);
+                    link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                    strcpy(link_compiler.path + plen - 5, "clang++");
+                }
+            }
+            strncpy(link_compiler.linker_path, link_compiler.path, sizeof(link_compiler.linker_path) - 1);
+            break;
+        }
+    }
+
+    // Link the executable
+    LinkJob link_job = {0};
+    link_job.object_paths = link_obj_paths;
+    link_job.object_count = compilable_count;
+    link_job.output_path = artifact_path;
+    link_job.lib_paths = lib_paths;
+    link_job.lib_path_count = lib_path_count;
+    link_job.link_libs = link_libs;
+    link_job.link_lib_count = link_lib_count;
+    link_job.shared = false;
+
+    // Propagate coverage flags to linker
+    if (coverage_flag_count > 0) {
+        link_job.extra_flags = coverage_flags;
+        link_job.extra_flag_count = coverage_flag_count;
+    }
+
+    cdo_info("Linking exe/ module: %s", artifact_path);
+    rc = compiler_link(&link_job, &link_compiler);
+
+    if (rc != 0) {
+        cdo_error("linking failed for exe/ module in crate '%s'", crate->name);
+        for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
+        free(link_obj_bufs);
+        free(link_obj_paths);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // Store artifact path in the module struct
+    strncpy(exe_mod->artifact_path, artifact_path, sizeof(exe_mod->artifact_path) - 1);
+    exe_mod->artifact_path[sizeof(exe_mod->artifact_path) - 1] = '\0';
+
+    // Post-link: deploy catalog files alongside executable binaries
+    int deployed = deploy_catalog_files(ws->root_path, build_dir);
+    if (deployed > 0) {
+        cdo_debug("deployed %d catalog file(s) to %s/catalogs/", deployed, build_dir);
+    }
+
+    // Cleanup
+    for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
+    free(link_obj_bufs);
+    free(link_obj_paths);
+    free(dirty_indices);
+    free(compilable_indices);
+    free(all_includes);
+    for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+    free(inc_paths);
+    filelist_free(&sources);
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test Module compilation
+// ---------------------------------------------------------------------------
+
+/// Build the Test_Module for a crate: compile all .c/.cpp files in tst/
+/// into object files placed in build/<profile>/<crate_name>/tst/, then link
+/// them against the Library_Module's static library artifact to produce a test
+/// executable at build/<profile>/<crate_name>/<crate_name>_test.exe.
+///
+/// Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 11.1, 11.5
+///
+/// @param ws           The workspace
+/// @param crate        The crate containing the test module
+/// @param compiler     Detected compiler info
+/// @param profile      Active build profile name (e.g., "debug", "release")
+/// @param build_prof   Loaded build profile settings
+/// @param jobs         Parallelism level for compilation
+/// @param coverage_flags   Coverage flags array (or NULL)
+/// @param coverage_flag_count  Number of coverage flags
+/// @param progress     Progress bar (may be NULL)
+/// @param completed_units  Pointer to completed unit counter (updated in place)
+/// @return 0 on success, non-zero on failure
+static int build_test_module(const Workspace* ws, Crate* crate,
+                             const CompilerInfo* compiler,
+                             const char* profile,
+                             const BuildProfile* build_prof,
+                             int jobs,
+                             const char** coverage_flags,
+                             int coverage_flag_count,
+                             ProgressBar* progress,
+                             int* completed_units) {
+    if (!crate->modules[MODULE_TST].present) return 0; // Nothing to do
+
+    // Req 5.5: Test module requires a Library_Module in the same crate
+    if (!crate->has_lib) {
+        cdo_error("crate '%s': tst/ module requires a lib/ module", crate->name);
+        return 1;
+    }
+
+    Module* tst_mod = &crate->modules[MODULE_TST];
+
+    // --- Scan tst/ for source files ---
+    FileList sources = {0};
+    int rc = scanner_scan_module_sources(tst_mod->dir_path, MODULE_TST, NULL, 0, &sources);
+    if (rc != 0) {
+        cdo_error("failed to scan tst/ sources for crate '%s'", crate->name);
+        return 1;
+    }
+
+    // Filter to compilable sources only
+    int compilable_count = 0;
+    for (int s = 0; s < sources.count; s++) {
+        const char* ext = pal_path_ext(sources.paths[s]);
+        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+            compilable_count++;
+        }
+    }
+
+    if (compilable_count == 0) {
+        cdo_info("crate '%s' tst/ module has no compilable source files, skipping",
+                 crate->name);
+        filelist_free(&sources);
+        return 0;
+    }
+
+    // --- Create object output directory: build/<profile>/<crate_name>/tst/ ---
+    char build_dir[260];
+    build_dir_for_crate(ws, crate, profile, build_dir, sizeof(build_dir));
+
+    char tst_obj_dir[260];
+    char tst_artifact_path[260];
+    int apath_rc = module_compute_artifact_path(ws->root_path, crate->name,
+                                                MODULE_TST, profile,
+                                                tst_artifact_path, sizeof(tst_artifact_path),
+                                                tst_obj_dir, sizeof(tst_obj_dir));
+    if (apath_rc != 0) {
+        cdo_error("failed to compute artifact path for tst/ module in crate '%s'",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // --- Resolve include paths for the test module ---
+    char** inc_paths = NULL;
+    int inc_count = 0;
+    rc = module_include_paths(crate, MODULE_TST, ws, &inc_paths, &inc_count);
+    if (rc != 0) {
+        cdo_error("failed to compute include paths for tst/ module in crate '%s'",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // Build const char** from the returned paths for CompileJob
+    const char** all_includes = (const char**)malloc((inc_count + 1) * sizeof(const char*));
+    if (!all_includes) {
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+    for (int i = 0; i < inc_count; i++) {
+        all_includes[i] = inc_paths[i];
+    }
+
+    // --- Compute dirty set (incremental build) ---
+    int* compilable_indices = (int*)malloc(sizeof(int) * sources.count);
+    if (!compilable_indices) {
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    int ci = 0;
+    for (int s = 0; s < sources.count; s++) {
+        const char* ext = pal_path_ext(sources.paths[s]);
+        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+            compilable_indices[ci++] = s;
+        }
+    }
+
+    int* dirty_indices = (int*)malloc(sizeof(int) * compilable_count);
+    int dirty_count = 0;
+    if (!dirty_indices) {
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    for (int i = 0; i < compilable_count; i++) {
+        int src_idx = compilable_indices[i];
+        const char* src_path = sources.paths[src_idx];
+
+        char obj_path[260];
+        object_path_from_source(src_path, tst_obj_dir, obj_path, sizeof(obj_path));
+
+        uint64_t src_mtime = 0, obj_mtime = 0;
+        bool needs_rebuild = true;
+
+        if (pal_file_mtime(src_path, &src_mtime) == 0 &&
+            pal_file_mtime(obj_path, &obj_mtime) == 0) {
+            if (obj_mtime >= src_mtime) {
+                needs_rebuild = false;
+            }
+        }
+
+        if (needs_rebuild) {
+            dirty_indices[dirty_count++] = src_idx;
+        }
+    }
+
+    // --- Compile dirty sources ---
+    if (dirty_count > 0) {
+        cdo_info("Compiling tst/ module for crate '%s' (%d files)", crate->name, dirty_count);
+
+        // Merge crate-level defines with profile defines + CDO_TESTING
+        int merged_define_count = build_prof->define_count + crate->define_count + 1;
+        const char** merged_defines = (const char**)malloc(sizeof(const char*) * (size_t)merged_define_count);
+        if (!merged_defines) {
+            merged_define_count = 0;
+        } else {
+            int di = 0;
+            for (int d = 0; d < build_prof->define_count; d++) {
+                merged_defines[di++] = build_prof->defines[d];
+            }
+            for (int d = 0; d < crate->define_count; d++) {
+                merged_defines[di++] = crate->defines[d];
+            }
+            // Req 5.2: Add CDO_TESTING define
+            merged_defines[di++] = "CDO_TESTING";
+        }
+
+        CompileJob* compile_jobs = (CompileJob*)calloc(dirty_count, sizeof(CompileJob));
+        char** obj_paths = (char**)calloc(dirty_count, sizeof(char*));
+        if (!compile_jobs || !obj_paths) {
+            cdo_error("out of memory allocating compile jobs for tst/ module");
+            free(compile_jobs);
+            free(obj_paths);
+            free(merged_defines);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+
+        for (int d = 0; d < dirty_count; d++) {
+            int src_idx = dirty_indices[d];
+            const char* src_path = sources.paths[src_idx];
+
+            obj_paths[d] = (char*)malloc(260);
+            if (!obj_paths[d]) {
+                cdo_error("out of memory");
+                for (int x = 0; x < d; x++) free(obj_paths[x]);
+                free(obj_paths);
+                free(compile_jobs);
+                free(merged_defines);
+                free(dirty_indices);
+                free(compilable_indices);
+                free(all_includes);
+                for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+                free(inc_paths);
+                filelist_free(&sources);
+                return 1;
+            }
+            object_path_from_source(src_path, tst_obj_dir, obj_paths[d], 260);
+
+            compile_jobs[d].source_path = src_path;
+            compile_jobs[d].object_path = obj_paths[d];
+            compile_jobs[d].include_paths = all_includes;
+            compile_jobs[d].include_path_count = inc_count;
+            compile_jobs[d].optimize = build_prof->optimize;
+            compile_jobs[d].debug_info = build_prof->debug_info;
+            compile_jobs[d].defines = merged_defines;
+            compile_jobs[d].define_count = merged_define_count;
+
+            // Apply profile extra flags + coverage flags
+            {
+                int total_extra = build_prof->extra_flag_count + coverage_flag_count;
+                if (total_extra > 0) {
+                    static const char* merged_extra_flags[BUILD_PROFILE_MAX_FLAGS + 2];
+                    int mf = 0;
+                    for (int f = 0; f < build_prof->extra_flag_count; f++) {
+                        merged_extra_flags[mf++] = build_prof->extra_flags[f];
+                    }
+                    for (int f = 0; f < coverage_flag_count; f++) {
+                        merged_extra_flags[mf++] = coverage_flags[f];
+                    }
+                    compile_jobs[d].extra_flags = merged_extra_flags;
+                    compile_jobs[d].extra_flag_count = total_extra;
+                } else {
+                    compile_jobs[d].extra_flags = NULL;
+                    compile_jobs[d].extra_flag_count = 0;
+                }
+            }
+
+            // Set language standard based on file type
+            if (is_cpp_source(src_path)) {
+                compile_jobs[d].c_standard = NULL;
+                compile_jobs[d].cpp_standard = cpp_standard_str(crate->cpp_standard);
+            } else {
+                compile_jobs[d].c_standard = c_standard_str(crate->c_standard);
+                compile_jobs[d].cpp_standard = NULL;
+            }
+        }
+
+        // Execute compilation batch
+        rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs);
+
+        for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
+        free(obj_paths);
+        free(compile_jobs);
+        free(merged_defines);
+
+        if (rc != 0) {
+            cdo_error("compilation failed for tst/ module in crate '%s'", crate->name);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+    } else {
+        cdo_info("crate '%s' tst/ module is up to date", crate->name);
+    }
+
+    // Update progress
+    if (progress && completed_units) {
+        *completed_units += compilable_count;
+        progress_update(progress, *completed_units);
+    }
+
+    // --- Link test executable ---
+    // Collect ALL object file paths for the link step
+    const char** link_obj_paths = (const char**)malloc(compilable_count * sizeof(const char*));
+    char** link_obj_bufs = (char**)calloc(compilable_count, sizeof(char*));
+    if (!link_obj_paths || !link_obj_bufs) {
+        cdo_error("out of memory for link step");
+        free(link_obj_paths);
+        free(link_obj_bufs);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    for (int i = 0; i < compilable_count; i++) {
+        int src_idx = compilable_indices[i];
+        link_obj_bufs[i] = (char*)malloc(260);
+        if (!link_obj_bufs[i]) {
+            for (int x = 0; x < i; x++) free(link_obj_bufs[x]);
+            free(link_obj_bufs);
+            free(link_obj_paths);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int j = 0; j < inc_count; j++) free(inc_paths[j]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+        object_path_from_source(sources.paths[src_idx], tst_obj_dir,
+                                link_obj_bufs[i], 260);
+        link_obj_paths[i] = link_obj_bufs[i];
+    }
+
+    // Artifact path already computed by module_compute_artifact_path above
+    char artifact_path[260];
+    strncpy(artifact_path, tst_artifact_path, sizeof(artifact_path) - 1);
+    artifact_path[sizeof(artifact_path) - 1] = '\0';
+
+    // Collect libraries to link against:
+    // 1. Own crate's library module artifact
+    // 2. Dependency crate library artifacts
+    // 3. Platform link_libs
+    const char* link_libs[192];
+    int link_lib_count = 0;
+    const char* lib_paths[64];
+    int lib_path_count = 0;
+
+    // Req 5.3: Link against own crate's Library_Module static library
+    // We add the build dir as a lib search path and the crate name as a link lib
+    lib_paths[lib_path_count++] = build_dir;
+
+    // Extract just the library name from the artifact for linking
+    // On Windows: crate.lib -> link with "crate"
+    // On Unix: libcrate.a -> link with "crate"
+    link_libs[link_lib_count++] = crate->name;
+
+    // Add dependency crate library artifacts
+    for (int d = 0; d < crate->dep_count; d++) {
+        int dep_idx = crate->dep_indices[d];
+        Crate* dep_crate = &ws->crates[dep_idx];
+
+        if (dep_crate->has_lib && lib_path_count < 64) {
+            char dep_build_dir[260];
+            build_dir_for_crate(ws, dep_crate, profile, dep_build_dir, sizeof(dep_build_dir));
+
+            // Use static buffers for lib paths (persisted for duration of link)
+            static char dep_lib_path_bufs[64][260];
+            strncpy(dep_lib_path_bufs[lib_path_count], dep_build_dir, 259);
+            dep_lib_path_bufs[lib_path_count][259] = '\0';
+            lib_paths[lib_path_count] = dep_lib_path_bufs[lib_path_count];
+            lib_path_count++;
+
+            if (link_lib_count < 192) {
+                link_libs[link_lib_count++] = dep_crate->name;
+            }
+        }
+    }
+
+    // Add dev-dependency crate library artifacts
+    for (int d = 0; d < crate->dev_dep_count; d++) {
+        int dep_idx = crate->dev_dep_indices[d];
+        if (dep_idx < 0 || dep_idx >= ws->crate_count) continue;
+        Crate* dep_crate = &ws->crates[dep_idx];
+
+        if (dep_crate->has_lib && lib_path_count < 64) {
+            char dep_build_dir[260];
+            build_dir_for_crate(ws, dep_crate, profile, dep_build_dir, sizeof(dep_build_dir));
+
+            static char dev_dep_lib_path_bufs[64][260];
+            strncpy(dev_dep_lib_path_bufs[lib_path_count], dep_build_dir, 259);
+            dev_dep_lib_path_bufs[lib_path_count][259] = '\0';
+            lib_paths[lib_path_count] = dev_dep_lib_path_bufs[lib_path_count];
+            lib_path_count++;
+
+            if (link_lib_count < 192) {
+                link_libs[link_lib_count++] = dep_crate->name;
+            }
+        }
+    }
+
+    // Platform link libs from the crate manifest
+    for (int l = 0; l < crate->link_lib_count && link_lib_count < 192; l++) {
+        link_libs[link_lib_count++] = crate->link_libs[l];
+    }
+
+    // Link as executable (shared = false, no static archive)
+    LinkJob link_job = {0};
+    link_job.object_paths = link_obj_paths;
+    link_job.object_count = compilable_count;
+    link_job.output_path = artifact_path;
+    link_job.lib_paths = lib_paths;
+    link_job.lib_path_count = lib_path_count;
+    link_job.link_libs = link_libs;
+    link_job.link_lib_count = link_lib_count;
+    link_job.shared = false;
+
+    // Propagate coverage flags to linker
+    if (coverage_flag_count > 0) {
+        link_job.extra_flags = coverage_flags;
+        link_job.extra_flag_count = coverage_flag_count;
+    }
+
+    // If any source is C++, use C++ linker driver
+    CompilerInfo link_compiler = *compiler;
+    for (int s = 0; s < sources.count; s++) {
+        if (is_cpp_source(sources.paths[s])) {
+            if (compiler->family == COMPILER_GCC) {
+                size_t plen = strlen(compiler->path);
+                if (plen >= 7 && strcmp(compiler->path + plen - 7, "gcc.exe") == 0) {
+                    strncpy(link_compiler.path, compiler->path, sizeof(link_compiler.path) - 1);
+                    link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                    strcpy(link_compiler.path + plen - 7, "g++.exe");
+                } else if (plen >= 3 && strcmp(compiler->path + plen - 3, "gcc") == 0) {
+                    strncpy(link_compiler.path, compiler->path, sizeof(link_compiler.path) - 1);
+                    link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                    strcpy(link_compiler.path + plen - 3, "g++");
+                } else if (strcmp(compiler->path, "cc") == 0) {
+                    strncpy(link_compiler.path, "c++", sizeof(link_compiler.path) - 1);
+                }
+            } else if (compiler->family == COMPILER_CLANG) {
+                size_t plen = strlen(compiler->path);
+                if (plen >= 9 && strcmp(compiler->path + plen - 9, "clang.exe") == 0) {
+                    strncpy(link_compiler.path, compiler->path, sizeof(link_compiler.path) - 1);
+                    link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                    strcpy(link_compiler.path + plen - 9, "clang++.exe");
+                } else if (plen >= 5 && strcmp(compiler->path + plen - 5, "clang") == 0) {
+                    strncpy(link_compiler.path, compiler->path, sizeof(link_compiler.path) - 1);
+                    link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                    strcpy(link_compiler.path + plen - 5, "clang++");
+                }
+            }
+            strncpy(link_compiler.linker_path, link_compiler.path, sizeof(link_compiler.linker_path) - 1);
+            break;
+        }
+    }
+
+    cdo_info("Linking tst/ module: %s", artifact_path);
+    rc = compiler_link(&link_job, &link_compiler);
+
+    if (rc != 0) {
+        cdo_error("linking failed for tst/ module in crate '%s'", crate->name);
+        for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
+        free(link_obj_bufs);
+        free(link_obj_paths);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // Store artifact path in the module struct
+    strncpy(tst_mod->artifact_path, artifact_path, sizeof(tst_mod->artifact_path) - 1);
+    tst_mod->artifact_path[sizeof(tst_mod->artifact_path) - 1] = '\0';
+
+    // Cleanup
+    for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
+    free(link_obj_bufs);
+    free(link_obj_paths);
+    free(dirty_indices);
+    free(compilable_indices);
+    free(all_includes);
+    for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+    free(inc_paths);
+    filelist_free(&sources);
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Shared Library Module compilation
+// ---------------------------------------------------------------------------
+
+/// Build the Shared_Library_Module for a crate: compile all .c/.cpp files in dyn/
+/// into object files placed in build/<profile>/<crate_name>/dyn/, then link them
+/// (together with the Library_Module's static library) into a shared library
+/// artifact at build/<profile>/<crate_name>/<artifact>.
+///
+/// Requirements: 4.1, 4.2, 4.3, 4.4, 11.1, 11.4
+///
+/// @param ws           The workspace
+/// @param crate        The crate containing the shared library module
+/// @param compiler     Detected compiler info
+/// @param profile      Active build profile name (e.g., "debug", "release")
+/// @param build_prof   Loaded build profile settings
+/// @param jobs         Parallelism level for compilation
+/// @param coverage_flags   Coverage flags array (or NULL)
+/// @param coverage_flag_count  Number of coverage flags
+/// @param progress     Progress bar (may be NULL)
+/// @param completed_units  Pointer to completed unit counter (updated in place)
+/// @return 0 on success, non-zero on failure
+static int build_shared_library_module(const Workspace* ws, Crate* crate,
+                                       const CompilerInfo* compiler,
+                                       const char* profile,
+                                       const BuildProfile* build_prof,
+                                       int jobs,
+                                       const char** coverage_flags,
+                                       int coverage_flag_count,
+                                       ProgressBar* progress,
+                                       int* completed_units) {
+    Module* dyn_mod = &crate->modules[MODULE_DYN];
+    if (!dyn_mod->present) return 0; // Nothing to do
+
+    // Req 4.4: dyn/ requires a lib/ module in the same crate
+    if (!crate->has_lib) {
+        cdo_error("crate '%s': dyn/ module requires a lib/ module", crate->name);
+        return 1;
+    }
+
+    // --- Scan dyn/ for source files ---
+    FileList sources = {0};
+    int rc = scanner_scan_module_sources(dyn_mod->dir_path, MODULE_DYN, NULL, 0, &sources);
+    if (rc != 0) {
+        cdo_error("failed to scan dyn/ sources for crate '%s'", crate->name);
+        return 1;
+    }
+
+    // Filter to compilable sources only
+    int compilable_count = 0;
+    for (int s = 0; s < sources.count; s++) {
+        const char* ext = pal_path_ext(sources.paths[s]);
+        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+            compilable_count++;
+        }
+    }
+
+    if (compilable_count == 0) {
+        cdo_error("crate '%s': dyn/ module has no compilable source files (.c or .cpp)",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // --- Create object output directory: build/<profile>/<crate_name>/dyn/ ---
+    char build_dir[260];
+    build_dir_for_crate(ws, crate, profile, build_dir, sizeof(build_dir));
+
+    char dyn_obj_dir[260];
+    char dyn_artifact_path[260];
+    int apath_rc = module_compute_artifact_path(ws->root_path, crate->name,
+                                                MODULE_DYN, profile,
+                                                dyn_artifact_path, sizeof(dyn_artifact_path),
+                                                dyn_obj_dir, sizeof(dyn_obj_dir));
+    if (apath_rc != 0) {
+        cdo_error("failed to compute artifact path for dyn/ module in crate '%s'",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // --- Resolve include paths for the dyn module ---
+    char** inc_paths = NULL;
+    int inc_count = 0;
+    rc = module_include_paths(crate, MODULE_DYN, ws, &inc_paths, &inc_count);
+    if (rc != 0) {
+        cdo_error("failed to compute include paths for dyn/ module in crate '%s'",
+                  crate->name);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // Build const char** from the returned paths for CompileJob
+    const char** all_includes = (const char**)malloc((inc_count + 1) * sizeof(const char*));
+    if (!all_includes) {
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+    for (int i = 0; i < inc_count; i++) {
+        all_includes[i] = inc_paths[i];
+    }
+
+    // --- Compute dirty set (incremental build) ---
+    int* compilable_indices = (int*)malloc(sizeof(int) * sources.count);
+    if (!compilable_indices) {
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    int ci = 0;
+    for (int s = 0; s < sources.count; s++) {
+        const char* ext = pal_path_ext(sources.paths[s]);
+        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+            compilable_indices[ci++] = s;
+        }
+    }
+
+    int* dirty_indices = (int*)malloc(sizeof(int) * compilable_count);
+    int dirty_count = 0;
+    if (!dirty_indices) {
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    for (int i = 0; i < compilable_count; i++) {
+        int src_idx = compilable_indices[i];
+        const char* src_path = sources.paths[src_idx];
+
+        char obj_path[260];
+        object_path_from_source(src_path, dyn_obj_dir, obj_path, sizeof(obj_path));
+
+        uint64_t src_mtime = 0, obj_mtime = 0;
+        bool needs_rebuild = true;
+
+        if (pal_file_mtime(src_path, &src_mtime) == 0 &&
+            pal_file_mtime(obj_path, &obj_mtime) == 0) {
+            if (obj_mtime >= src_mtime) {
+                needs_rebuild = false;
+            }
+        }
+
+        if (needs_rebuild) {
+            dirty_indices[dirty_count++] = src_idx;
+        }
+    }
+
+    // --- Compile dirty sources ---
+    if (dirty_count > 0) {
+        cdo_info("Compiling dyn/ module for crate '%s' (%d files)", crate->name, dirty_count);
+
+        // Merge crate-level defines with profile defines
+        int merged_define_count = build_prof->define_count + crate->define_count;
+        const char** merged_defines = NULL;
+        if (merged_define_count > 0) {
+            merged_defines = (const char**)malloc(sizeof(const char*) * (size_t)merged_define_count);
+            if (merged_defines) {
+                int di = 0;
+                for (int d = 0; d < build_prof->define_count; d++) {
+                    merged_defines[di++] = build_prof->defines[d];
+                }
+                for (int d = 0; d < crate->define_count; d++) {
+                    merged_defines[di++] = crate->defines[d];
+                }
+            } else {
+                merged_define_count = 0;
+            }
+        }
+
+        CompileJob* compile_jobs = (CompileJob*)calloc(dirty_count, sizeof(CompileJob));
+        char** obj_paths = (char**)calloc(dirty_count, sizeof(char*));
+        if (!compile_jobs || !obj_paths) {
+            cdo_error("out of memory allocating compile jobs for dyn/ module");
+            free(compile_jobs);
+            free(obj_paths);
+            free(merged_defines);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+
+        for (int d = 0; d < dirty_count; d++) {
+            int src_idx = dirty_indices[d];
+            const char* src_path = sources.paths[src_idx];
+
+            obj_paths[d] = (char*)malloc(260);
+            if (!obj_paths[d]) {
+                cdo_error("out of memory");
+                for (int x = 0; x < d; x++) free(obj_paths[x]);
+                free(obj_paths);
+                free(compile_jobs);
+                free(merged_defines);
+                free(dirty_indices);
+                free(compilable_indices);
+                free(all_includes);
+                for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+                free(inc_paths);
+                filelist_free(&sources);
+                return 1;
+            }
+            object_path_from_source(src_path, dyn_obj_dir, obj_paths[d], 260);
+
+            compile_jobs[d].source_path = src_path;
+            compile_jobs[d].object_path = obj_paths[d];
+            compile_jobs[d].include_paths = all_includes;
+            compile_jobs[d].include_path_count = inc_count;
+            compile_jobs[d].optimize = build_prof->optimize;
+            compile_jobs[d].debug_info = build_prof->debug_info;
+            compile_jobs[d].defines = merged_defines;
+            compile_jobs[d].define_count = merged_define_count;
+
+            // Apply profile extra flags + coverage flags + -fPIC for shared library
+            {
+                int total_extra = build_prof->extra_flag_count + coverage_flag_count + 1; // +1 for -fPIC
+                static const char* merged_extra_flags[BUILD_PROFILE_MAX_FLAGS + 4];
+                int mf = 0;
+                // Add -fPIC for position-independent code (Req 4.2)
+                // On Windows/MinGW this is harmless as all code is PIC by default
+                merged_extra_flags[mf++] = "-fPIC";
+                for (int f = 0; f < build_prof->extra_flag_count; f++) {
+                    merged_extra_flags[mf++] = build_prof->extra_flags[f];
+                }
+                for (int f = 0; f < coverage_flag_count; f++) {
+                    merged_extra_flags[mf++] = coverage_flags[f];
+                }
+                compile_jobs[d].extra_flags = merged_extra_flags;
+                compile_jobs[d].extra_flag_count = total_extra;
+            }
+
+            // Set language standard based on file type
+            if (is_cpp_source(src_path)) {
+                compile_jobs[d].c_standard = NULL;
+                compile_jobs[d].cpp_standard = cpp_standard_str(crate->cpp_standard);
+            } else {
+                compile_jobs[d].c_standard = c_standard_str(crate->c_standard);
+                compile_jobs[d].cpp_standard = NULL;
+            }
+        }
+
+        // Execute compilation batch
+        rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs);
+
+        for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
+        free(obj_paths);
+        free(compile_jobs);
+        free(merged_defines);
+
+        if (rc != 0) {
+            cdo_error("compilation failed for dyn/ module in crate '%s'", crate->name);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+    } else {
+        cdo_info("crate '%s' dyn/ module is up to date", crate->name);
+    }
+
+    // Update progress
+    if (progress && completed_units) {
+        *completed_units += compilable_count;
+        progress_update(progress, *completed_units);
+    }
+
+    // --- Link object files into shared library ---
+    // Collect ALL object file paths (not just dirty ones) for linking
+    const char** link_obj_paths = (const char**)malloc(compilable_count * sizeof(const char*));
+    char** link_obj_bufs = (char**)calloc(compilable_count, sizeof(char*));
+    if (!link_obj_paths || !link_obj_bufs) {
+        cdo_error("out of memory for link step");
+        free(link_obj_paths);
+        free(link_obj_bufs);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    for (int i = 0; i < compilable_count; i++) {
+        int src_idx = compilable_indices[i];
+        link_obj_bufs[i] = (char*)malloc(260);
+        if (!link_obj_bufs[i]) {
+            for (int x = 0; x < i; x++) free(link_obj_bufs[x]);
+            free(link_obj_bufs);
+            free(link_obj_paths);
+            free(dirty_indices);
+            free(compilable_indices);
+            free(all_includes);
+            for (int j = 0; j < inc_count; j++) free(inc_paths[j]);
+            free(inc_paths);
+            filelist_free(&sources);
+            return 1;
+        }
+        object_path_from_source(sources.paths[src_idx], dyn_obj_dir,
+                                link_obj_bufs[i], 260);
+        link_obj_paths[i] = link_obj_bufs[i];
+    }
+
+    // Artifact path already computed by module_compute_artifact_path above
+    char artifact_path[260];
+    strncpy(artifact_path, dyn_artifact_path, sizeof(artifact_path) - 1);
+    artifact_path[sizeof(artifact_path) - 1] = '\0';
+
+    // Prepare link job: link dyn/ objects against lib/ static library + dependency libs
+    // Library search path: the crate's own build dir (where the .lib/.a lives)
+    const char* lib_paths[64];
+    int lib_path_count = 0;
+    lib_paths[lib_path_count++] = build_dir;
+
+    // Also add dependency crate build directories as library search paths
+    for (int d = 0; d < crate->dep_count; d++) {
+        int dep_idx = crate->dep_indices[d];
+        Crate* dep_crate = &ws->crates[dep_idx];
+        if (dep_crate->has_lib && lib_path_count < 64) {
+            static char dep_lib_dirs[64][260];
+            build_dir_for_crate(ws, dep_crate, profile,
+                                dep_lib_dirs[lib_path_count], sizeof(dep_lib_dirs[lib_path_count]));
+            lib_paths[lib_path_count] = dep_lib_dirs[lib_path_count];
+            lib_path_count++;
+        }
+    }
+
+    // Link libraries: own crate's library + dependency crate libraries + platform link_libs
+    const char* link_libs[128];
+    int link_lib_count = 0;
+
+    // Link against own crate's library module
+    link_libs[link_lib_count++] = crate->name;
+
+    // Link against dependency crate libraries
+    for (int d = 0; d < crate->dep_count; d++) {
+        int dep_idx = crate->dep_indices[d];
+        Crate* dep_crate = &ws->crates[dep_idx];
+        if (dep_crate->has_lib && link_lib_count < 128) {
+            link_libs[link_lib_count++] = dep_crate->name;
+        }
+    }
+
+    // Platform link libraries from crate manifest
+    for (int l = 0; l < crate->link_lib_count && link_lib_count < 128; l++) {
+        link_libs[link_lib_count++] = crate->link_libs[l];
+    }
+
+    LinkJob link_job = {0};
+    link_job.object_paths = link_obj_paths;
+    link_job.object_count = compilable_count;
+    link_job.output_path = artifact_path;
+    link_job.lib_paths = lib_paths;
+    link_job.lib_path_count = lib_path_count;
+    link_job.link_libs = link_libs;
+    link_job.link_lib_count = link_lib_count;
+    link_job.shared = true; // Produce a shared library (.dll / .so)
+
+    // Propagate coverage flags to linker
+    if (coverage_flag_count > 0) {
+        link_job.extra_flags = coverage_flags;
+        link_job.extra_flag_count = coverage_flag_count;
+    }
+
+    cdo_info("Linking dyn/ module (shared library): %s", artifact_path);
+    rc = compiler_link(&link_job, compiler);
+
+    if (rc != 0) {
+        cdo_error("linking failed for dyn/ module in crate '%s'", crate->name);
+        for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
+        free(link_obj_bufs);
+        free(link_obj_paths);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 1;
+    }
+
+    // Store artifact path in the module struct
+    strncpy(dyn_mod->artifact_path, artifact_path, sizeof(dyn_mod->artifact_path) - 1);
+    dyn_mod->artifact_path[sizeof(dyn_mod->artifact_path) - 1] = '\0';
+
+    // Cleanup
+    for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
+    free(link_obj_bufs);
+    free(link_obj_paths);
+    free(dirty_indices);
+    free(compilable_indices);
+    free(all_includes);
+    for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+    free(inc_paths);
+    filelist_free(&sources);
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Crate Module Build Orchestrator
+// ---------------------------------------------------------------------------
+
+/// Build all modules within a crate in the correct dependency order.
+/// Compiles lib/ first; if it fails, skips all other modules and reports error.
+/// After lib/ succeeds, builds exe/, dyn/, tst/ sequentially.
+///
+/// Inter-crate library linking and transitive dependencies are already handled
+/// by the individual module build functions via dep_indices (resolved by BFS
+/// in workspace_resolve).
+///
+/// Requirements: 8.1, 8.2, 8.3, 7.2, 7.5
+///
+/// @param ws           The workspace
+/// @param crate        The crate to build modules for
+/// @param compiler     Detected compiler info
+/// @param profile      Active build profile name (e.g., "debug", "release")
+/// @param build_prof   Loaded build profile settings
+/// @param jobs         Parallelism level for compilation
+/// @param coverage_flags   Coverage flags array (or NULL)
+/// @param coverage_flag_count  Number of coverage flags
+/// @param progress     Progress bar (may be NULL)
+/// @param completed_units  Pointer to completed unit counter (updated in place)
+/// @return 0 on success, non-zero on failure
+static int build_crate_modules(const Workspace* ws, Crate* crate,
+                               const CompilerInfo* compiler,
+                               const char* profile,
+                               const BuildProfile* build_prof,
+                               int jobs,
+                               const char** coverage_flags,
+                               int coverage_flag_count,
+                               ProgressBar* progress,
+                               int* completed_units) {
+    int rc = 0;
+
+    // Req 8.1: Build Library_Module FIRST if present
+    if (crate->has_lib) {
+        rc = build_library_module(ws, crate, compiler, profile,
+                                  build_prof, jobs,
+                                  coverage_flags, coverage_flag_count,
+                                  progress, completed_units);
+        if (rc != 0) {
+            // Req 8.2: If lib/ fails, skip ALL dependent modules in this crate
+            cdo_error("Library module build failed for crate '%s'; "
+                      "skipping remaining modules", crate->name);
+            return rc;
+        }
+    }
+
+    // Req 8.1: After lib/ succeeds, build exe/, dyn/, tst/ (sequential for now)
+
+    // Build Executable_Module if present (Req 3.1, 3.2, 3.3, 3.4)
+    if (crate->modules[MODULE_EXE].present) {
+        rc = build_executable_module(ws, crate, compiler, profile,
+                                     build_prof, jobs,
+                                     coverage_flags, coverage_flag_count,
+                                     progress, completed_units);
+        if (rc != 0) {
+            cdo_error("Executable module build failed for crate '%s'", crate->name);
+            return rc;
+        }
+    }
+
+    // Build Shared_Library_Module if present (Req 4.1, 4.2, 4.3, 4.4)
+    if (crate->modules[MODULE_DYN].present) {
+        rc = build_shared_library_module(ws, crate, compiler, profile,
+                                         build_prof, jobs,
+                                         coverage_flags, coverage_flag_count,
+                                         progress, completed_units);
+        if (rc != 0) {
+            cdo_error("Shared library module build failed for crate '%s'", crate->name);
+            return rc;
+        }
+    }
+
+    // Build Test_Module if present (Req 5.1, 5.2, 5.3, 5.4, 5.5)
+    if (crate->modules[MODULE_TST].present) {
+        rc = build_test_module(ws, crate, compiler, profile,
+                               build_prof, jobs,
+                               coverage_flags, coverage_flag_count,
+                               progress, completed_units);
+        if (rc != 0) {
+            cdo_error("Test module build failed for crate '%s'", crate->name);
+            return rc;
+        }
+    }
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // cmd_build implementation
 // ---------------------------------------------------------------------------
 
@@ -660,6 +2493,24 @@ int cmd_build(const CdoOptions* opts) {
             }
         }
 
+        // 5a.2: Build all modules via the orchestrator (Req 8.1, 8.2, 8.3)
+        // Builds lib/ first, then exe/, dyn/, tst/ sequentially.
+        // If lib/ fails, all other modules are skipped.
+        if (crate->module_count > 0) {
+            rc = build_crate_modules(&ws, crate, &compiler, profile,
+                                     &build_profile, jobs,
+                                     coverage_flags, coverage_flag_count,
+                                     progress, &completed_units);
+            if (rc != 0) {
+                failed = 1;
+                break;
+            }
+            // Module-based crate fully built; skip legacy src/ flow
+            continue;
+        }
+
+        // --- Legacy src/-based build path (crates without module directories) ---
+
         // 5b: Scan sources
         FileList sources = {0};
         rc = scanner_scan_sources(crate_full_path, NULL, 0, &sources);
@@ -921,6 +2772,106 @@ int cmd_build(const CdoOptions* opts) {
         }
 
         if (!failed) {
+            // 5f.1: For test crates depending on executables, recompile dep sources
+            //       (excluding main) with test defines into the test's build directory
+            int dep_obj_count = 0;
+            char** dep_obj_paths = NULL;
+
+            if (crate->type == CRATE_TEST) {
+                for (int d = 0; d < crate->dep_count; d++) {
+                    int dep_idx_loop = crate->dep_indices[d];
+                    Crate* dep_crate = &ws.crates[dep_idx_loop];
+                    if (dep_crate->type != CRATE_EXECUTABLE) continue;
+
+                    char dep_full_path[260];
+                    pal_path_join(dep_full_path, sizeof(dep_full_path), ws.root_path, dep_crate->path);
+
+                    FileList dep_sources = {0};
+                    if (scanner_scan_sources(dep_full_path, NULL, 0, &dep_sources) != 0) continue;
+
+                    // Count compilable non-main sources
+                    int dep_compilable = 0;
+                    for (int s = 0; s < dep_sources.count; s++) {
+                        const char* ext2 = pal_path_ext(dep_sources.paths[s]);
+                        bool comp = is_cpp_source(dep_sources.paths[s]) || (ext2 && strcmp(ext2, ".c") == 0);
+                        if (!comp) continue;
+                        const char* fn = dep_sources.paths[s];
+                        const char* pp = fn;
+                        while (*pp) { if (*pp == '/' || *pp == '\\') fn = pp + 1; pp++; }
+                        if (strcmp(fn, "main.c") == 0 || strcmp(fn, "main.cpp") == 0 ||
+                            strcmp(fn, "main.cxx") == 0 || strcmp(fn, "main.cc") == 0) continue;
+                        dep_compilable++;
+                    }
+
+                    if (dep_compilable == 0) { filelist_free(&dep_sources); continue; }
+
+                    // Allocate/grow dep_obj_paths
+                    char** new_dep_objs = (char**)realloc(dep_obj_paths, (dep_obj_count + dep_compilable) * sizeof(char*));
+                    if (!new_dep_objs) { filelist_free(&dep_sources); continue; }
+                    dep_obj_paths = new_dep_objs;
+
+                    // Build compile jobs for dep sources
+                    CompileJob* dep_jobs = (CompileJob*)calloc(dep_compilable, sizeof(CompileJob));
+                    char** dep_obj_bufs = (char**)calloc(dep_compilable, sizeof(char*));
+                    if (!dep_jobs || !dep_obj_bufs) {
+                        free(dep_jobs); free(dep_obj_bufs);
+                        filelist_free(&dep_sources); continue;
+                    }
+
+                    int dj = 0;
+                    for (int s = 0; s < dep_sources.count; s++) {
+                        const char* ext2 = pal_path_ext(dep_sources.paths[s]);
+                        bool comp = is_cpp_source(dep_sources.paths[s]) || (ext2 && strcmp(ext2, ".c") == 0);
+                        if (!comp) continue;
+                        const char* fn = dep_sources.paths[s];
+                        const char* pp = fn;
+                        while (*pp) { if (*pp == '/' || *pp == '\\') fn = pp + 1; pp++; }
+                        if (strcmp(fn, "main.c") == 0 || strcmp(fn, "main.cpp") == 0 ||
+                            strcmp(fn, "main.cxx") == 0 || strcmp(fn, "main.cc") == 0) continue;
+
+                        dep_obj_bufs[dj] = (char*)malloc(260);
+                        if (!dep_obj_bufs[dj]) { dj++; continue; }
+                        // Put dep objects in the TEST's build dir to avoid collisions
+                        object_path_from_source(dep_sources.paths[s], build_dir, dep_obj_bufs[dj], 260);
+
+                        dep_jobs[dj].source_path = dep_sources.paths[s];
+                        dep_jobs[dj].object_path = dep_obj_bufs[dj];
+                        dep_jobs[dj].include_paths = all_includes;
+                        dep_jobs[dj].include_path_count = all_include_count;
+                        dep_jobs[dj].optimize = build_profile.optimize;
+                        dep_jobs[dj].debug_info = build_profile.debug_info;
+                        dep_jobs[dj].defines = merged_defines;  // includes CDO_TESTING from the test crate
+                        dep_jobs[dj].define_count = merged_define_count;
+                        if (is_cpp_source(dep_sources.paths[s])) {
+                            dep_jobs[dj].cpp_standard = cpp_standard_str(dep_crate->cpp_standard);
+                        } else {
+                            dep_jobs[dj].c_standard = c_standard_str(dep_crate->c_standard);
+                        }
+                        dj++;
+                    }
+
+                    // Compile dep sources with test defines
+                    cdo_info("Compiling dep '%s' for test (%d files)", dep_crate->name, dj);
+                    int dep_rc = compiler_compile_batch(dep_jobs, dj, &compiler, jobs);
+                    if (dep_rc != 0) {
+                        cdo_error("failed to compile dep '%s' for test crate", dep_crate->name);
+                        for (int x = 0; x < dj; x++) free(dep_obj_bufs[x]);
+                        free(dep_obj_bufs); free(dep_jobs);
+                        filelist_free(&dep_sources);
+                        failed = 1;
+                        break;
+                    }
+
+                    // Collect the object paths
+                    for (int x = 0; x < dj; x++) {
+                        dep_obj_paths[dep_obj_count++] = dep_obj_bufs[x];
+                    }
+                    free(dep_obj_bufs); // free the array, not the strings (owned by dep_obj_paths now)
+                    free(dep_jobs);
+                    filelist_free(&dep_sources);
+                }
+            }
+
             char output_path[260];
             output_path_for_crate(&ws, crate, profile, output_path, sizeof(output_path));
 
@@ -930,78 +2881,113 @@ int cmd_build(const CdoOptions* opts) {
             for (int l = 0; l < dep_link_lib_count && all_link_lib_count < 192; l++) {
                 all_link_libs[all_link_lib_count++] = dep_link_libs[l];
             }
+            // For test crates, also inherit link_libs from executable dependencies
+            if (crate->type == CRATE_TEST) {
+                for (int d = 0; d < crate->dep_count; d++) {
+                    int dep_idx = crate->dep_indices[d];
+                    Crate* dep_crate = &ws.crates[dep_idx];
+                    if (dep_crate->type == CRATE_EXECUTABLE) {
+                        for (int l = 0; l < dep_crate->link_lib_count && all_link_lib_count < 192; l++) {
+                            all_link_libs[all_link_lib_count++] = dep_crate->link_libs[l];
+                        }
+                    }
+                }
+            }
             for (int l = 0; l < crate->link_lib_count && all_link_lib_count < 192; l++) {
                 all_link_libs[all_link_lib_count++] = crate->link_libs[l];
             }
 
-            LinkJob link_job = {0};
-            link_job.object_paths = (const char**)all_obj_paths;
-            link_job.object_count = compilable_count;
-            link_job.output_path = output_path;
-            link_job.lib_paths = dep_lib_paths;
-            link_job.lib_path_count = dep_lib_count;
-            link_job.link_libs = all_link_libs;
-            link_job.link_lib_count = all_link_lib_count;
-            link_job.shared = (crate->type == CRATE_SHARED_LIB);
-
-            // Propagate coverage flags to linker
-            if (coverage_flag_count > 0) {
-                link_job.extra_flags = coverage_flags;
-                link_job.extra_flag_count = coverage_flag_count;
-            }
-
-            // If any source is C++, use C++ linker driver
-            CompilerInfo link_compiler = compiler;
-            for (int s = 0; s < sources.count; s++) {
-                if (is_cpp_source(sources.paths[s])) {
-                    if (compiler.family == COMPILER_GCC) {
-                        // Handle both bare "gcc" and full paths like ".cdo/tools/w64devkit/bin/gcc.exe"
-                        size_t plen = strlen(compiler.path);
-                        if (plen >= 7 && strcmp(compiler.path + plen - 7, "gcc.exe") == 0) {
-                            // Replace "gcc.exe" with "g++.exe"
-                            strncpy(link_compiler.path, compiler.path, sizeof(link_compiler.path) - 1);
-                            link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
-                            strcpy(link_compiler.path + plen - 7, "g++.exe");
-                        } else if (plen >= 3 && strcmp(compiler.path + plen - 3, "gcc") == 0) {
-                            // Replace "gcc" with "g++"
-                            strncpy(link_compiler.path, compiler.path, sizeof(link_compiler.path) - 1);
-                            link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
-                            strcpy(link_compiler.path + plen - 3, "g++");
-                        } else if (strcmp(compiler.path, "cc") == 0) {
-                            strncpy(link_compiler.path, "c++", sizeof(link_compiler.path) - 1);
-                        }
-                    } else if (compiler.family == COMPILER_CLANG) {
-                        size_t plen = strlen(compiler.path);
-                        if (plen >= 9 && strcmp(compiler.path + plen - 9, "clang.exe") == 0) {
-                            strncpy(link_compiler.path, compiler.path, sizeof(link_compiler.path) - 1);
-                            link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
-                            strcpy(link_compiler.path + plen - 9, "clang++.exe");
-                        } else if (plen >= 5 && strcmp(compiler.path + plen - 5, "clang") == 0) {
-                            strncpy(link_compiler.path, compiler.path, sizeof(link_compiler.path) - 1);
-                            link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
-                            strcpy(link_compiler.path + plen - 5, "clang++");
-                        }
-                    }
-                    strncpy(link_compiler.linker_path, link_compiler.path, sizeof(link_compiler.linker_path) - 1);
-                    break;
-                }
-            }
-
-            cdo_info("Linking %s", output_path);
-            rc = compiler_link(&link_job, &link_compiler);
-            if (rc != 0) {
-                cdo_error("linking failed for crate '%s'", crate->name);
+            // Combine own objects + dep objects for linking
+            int total_link_objs = compilable_count + dep_obj_count;
+            const char** merged_obj_paths = (const char**)malloc(total_link_objs * sizeof(const char*));
+            if (!merged_obj_paths) {
+                cdo_error("out of memory");
+                for (int oi = 0; oi < dep_obj_count; oi++) free(dep_obj_paths[oi]);
+                free(dep_obj_paths);
                 failed = 1;
-            }
-
-            // Post-link: deploy catalog files alongside executable binaries
-            if (!failed && crate->type == CRATE_EXECUTABLE) {
-                int deployed = deploy_catalog_files(ws.root_path, build_dir);
-                if (deployed > 0) {
-                    cdo_debug("deployed %d catalog file(s) to %s/catalogs/",
-                              deployed, build_dir);
+            } else {
+                for (int oi = 0; oi < compilable_count; oi++) {
+                    merged_obj_paths[oi] = all_obj_paths[oi];
+                }
+                for (int oi = 0; oi < dep_obj_count; oi++) {
+                    merged_obj_paths[compilable_count + oi] = dep_obj_paths[oi];
                 }
             }
+
+            if (!failed) {
+                LinkJob link_job = {0};
+                link_job.object_paths = merged_obj_paths;
+                link_job.object_count = total_link_objs;
+                link_job.output_path = output_path;
+                link_job.lib_paths = dep_lib_paths;
+                link_job.lib_path_count = dep_lib_count;
+                link_job.link_libs = all_link_libs;
+                link_job.link_lib_count = all_link_lib_count;
+                link_job.shared = (crate->type == CRATE_SHARED_LIB);
+
+                // Propagate coverage flags to linker
+                if (coverage_flag_count > 0) {
+                    link_job.extra_flags = coverage_flags;
+                    link_job.extra_flag_count = coverage_flag_count;
+                }
+
+                // If any source is C++, use C++ linker driver
+                CompilerInfo link_compiler = compiler;
+                for (int s = 0; s < sources.count; s++) {
+                    if (is_cpp_source(sources.paths[s])) {
+                        if (compiler.family == COMPILER_GCC) {
+                            // Handle both bare "gcc" and full paths like ".cdo/tools/w64devkit/bin/gcc.exe"
+                            size_t plen = strlen(compiler.path);
+                            if (plen >= 7 && strcmp(compiler.path + plen - 7, "gcc.exe") == 0) {
+                                // Replace "gcc.exe" with "g++.exe"
+                                strncpy(link_compiler.path, compiler.path, sizeof(link_compiler.path) - 1);
+                                link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                                strcpy(link_compiler.path + plen - 7, "g++.exe");
+                            } else if (plen >= 3 && strcmp(compiler.path + plen - 3, "gcc") == 0) {
+                                // Replace "gcc" with "g++"
+                                strncpy(link_compiler.path, compiler.path, sizeof(link_compiler.path) - 1);
+                                link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                                strcpy(link_compiler.path + plen - 3, "g++");
+                            } else if (strcmp(compiler.path, "cc") == 0) {
+                                strncpy(link_compiler.path, "c++", sizeof(link_compiler.path) - 1);
+                            }
+                        } else if (compiler.family == COMPILER_CLANG) {
+                            size_t plen = strlen(compiler.path);
+                            if (plen >= 9 && strcmp(compiler.path + plen - 9, "clang.exe") == 0) {
+                                strncpy(link_compiler.path, compiler.path, sizeof(link_compiler.path) - 1);
+                                link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                                strcpy(link_compiler.path + plen - 9, "clang++.exe");
+                            } else if (plen >= 5 && strcmp(compiler.path + plen - 5, "clang") == 0) {
+                                strncpy(link_compiler.path, compiler.path, sizeof(link_compiler.path) - 1);
+                                link_compiler.path[sizeof(link_compiler.path) - 1] = '\0';
+                                strcpy(link_compiler.path + plen - 5, "clang++");
+                            }
+                        }
+                        strncpy(link_compiler.linker_path, link_compiler.path, sizeof(link_compiler.linker_path) - 1);
+                        break;
+                    }
+                }
+
+                cdo_info("Linking %s", output_path);
+                rc = compiler_link(&link_job, &link_compiler);
+                if (rc != 0) {
+                    cdo_error("linking failed for crate '%s'", crate->name);
+                    failed = 1;
+                }
+
+                // Post-link: deploy catalog files alongside executable binaries
+                if (!failed && crate->type == CRATE_EXECUTABLE) {
+                    int deployed = deploy_catalog_files(ws.root_path, build_dir);
+                    if (deployed > 0) {
+                        cdo_debug("deployed %d catalog file(s) to %s/catalogs/",
+                                  deployed, build_dir);
+                    }
+                }
+            }
+
+            free(merged_obj_paths);
+            for (int oi = 0; oi < dep_obj_count; oi++) free(dep_obj_paths[oi]);
+            free(dep_obj_paths);
         }
 
         // Cleanup
