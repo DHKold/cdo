@@ -26,7 +26,42 @@ endif()
 # --- Target: cdo (executable) ---
 add_executable(cdo
     src/cdo/main.cpp
+    src/cdo/commands/cmd_build.c
+    src/cdo/commands/cmd_clean.c
+    src/cdo/commands/cmd_deps.c
+    src/cdo/commands/cmd_doctor.c
+    src/cdo/commands/cmd_new.c
+    src/cdo/commands/cmd_run.c
+    src/cdo/commands/cmd_shader.c
+    src/cdo/commands/cmd_test.c
+    src/cdo/commands/cmd_tool.c
+    src/cdo/core/cli.c
+    src/cdo/core/output.c
+    src/cdo/core/toml.c
+    src/cdo/core/json.c
+    src/cdo/core/scanner.c
+    src/cdo/core/threadpool.c
+    src/cdo/core/workspace.c
+    src/cdo/core/compiler.c
+    src/cdo/core/errors.c
+    src/cdo/core/http.c
+    src/cdo/core/archive.c
+    src/cdo/core/template.c
+    src/cdo/core/deps.c
+    src/cdo/core/shader.c
+    src/cdo/pal/pal_fs.c
+    src/cdo/pal/pal_path.c
+    src/cdo/pal/pal_process.c
+    src/cdo/pal/pal_sysinfo.c
 )
+target_include_directories(cdo PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/cdo
+)
+if(WIN32)
+    target_link_libraries(cdo PRIVATE winhttp)
+else()
+    target_link_libraries(cdo PRIVATE m pthread)
+endif()
 cdo_apply_dependencies(cdo)
 cdo_copy_runtime_dependencies(cdo)
 
@@ -43,15 +78,39 @@ if(CDO_ENABLE_TESTS)
     # --- Test: cdo_pbt (property-based tests, C17) ---
     add_executable(cdo_pbt
         tests/test_main.c
+        src/cdo/pal/pal_path.c
+        src/cdo/pal/pal_fs.c
+        src/cdo/pal/pal_sysinfo.c
+        src/cdo/pal/pal_process.c
+        src/cdo/core/output.c
+        src/cdo/core/toml.c
+        src/cdo/core/cli.c
+        src/cdo/core/scanner.c
+        src/cdo/core/threadpool.c
+        src/cdo/core/workspace.c
+        src/cdo/core/archive.c
+        src/cdo/core/compiler.c
+        src/cdo/core/deps.c
+        src/cdo/core/http.c
+        src/cdo/core/template.c
+        src/cdo/core/shader.c
+        src/cdo/commands/cmd_clean.c
     )
     target_include_directories(cdo_pbt PRIVATE
         ${CMAKE_SOURCE_DIR}/tests
+        ${CMAKE_SOURCE_DIR}/src/cdo
     )
+    target_compile_definitions(cdo_pbt PRIVATE CDO_TESTING)
     set_target_properties(cdo_pbt PROPERTIES
         C_STANDARD 17
         C_STANDARD_REQUIRED ON
         C_EXTENSIONS OFF
     )
+    if(WIN32)
+        target_link_libraries(cdo_pbt PRIVATE winhttp)
+    else()
+        target_link_libraries(cdo_pbt PRIVATE m pthread)
+    endif()
     add_test(NAME cdo_pbt COMMAND cdo_pbt)
 
 endif()

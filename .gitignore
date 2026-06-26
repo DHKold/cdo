@@ -26,3 +26,4 @@ third_party/**/*.tbz2
 *.user
 *.suo
 .DS_Store
+demos

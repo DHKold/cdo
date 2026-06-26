@@ -19,53 +19,53 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Note: Work within the existing directory structure — do not recreate directories that already exist
     - _Requirements: 17.3_
 
-- [ ] 2. Implement Platform Abstraction Layer (PAL)
-  - [-] 2.1 Implement filesystem operations (`src/pal/pal_fs.c`)
+- [x] 2. Implement Platform Abstraction Layer (PAL)
+  - [x] 2.1 Implement filesystem operations (`src/pal/pal_fs.c`)
     - Implement `pal_file_mtime`, `pal_dir_walk`, `pal_mkdir_p`, `pal_rmdir_r`, `pal_path_exists`, `pal_file_read`, `pal_file_write`
     - Use `#ifdef _WIN32` for Windows APIs (FindFirstFile, GetFileTime) and POSIX APIs (opendir, stat) for Linux/macOS
     - _Requirements: 15.3, 15.5_
 
-  - [-] 2.2 Implement path utilities (`src/pal/pal_path.c`)
+  - [x] 2.2 Implement path utilities (`src/pal/pal_path.c`)
     - Implement `pal_path_normalize` (convert `\` to `/` on Windows, collapse `//`), `pal_path_join`, `pal_path_ext`
     - Accept both `/` and `\` on Windows transparently
     - _Requirements: 15.5_
 
-  - [~] 2.3 Write property test for path normalization idempotence
+  - [x] 2.3 Write property test for path normalization idempotence
     - **Property 15: Path Normalization Idempotence**
     - **Validates: Requirements 15.5**
 
-  - [~] 2.4 Implement process spawning (`src/pal/pal_process.c`)
+  - [x] 2.4 Implement process spawning (`src/pal/pal_process.c`)
     - Implement `pal_spawn` (synchronous), `pal_spawn_async`, `pal_wait`
     - Windows: use `CreateProcess` with pipe redirection for stdout/stderr capture
     - POSIX: use `posix_spawn` or `fork+exec` with pipe redirection
     - Forward environment variables including PATH modifications
     - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5, 15.2_
 
-  - [-] 2.5 Implement system info (`src/pal/pal_sysinfo.c`)
+  - [x] 2.5 Implement system info (`src/pal/pal_sysinfo.c`)
     - Implement `pal_cpu_count` (Windows: `GetSystemInfo`, POSIX: `sysconf(_SC_NPROCESSORS_ONLN)`)
     - Implement `pal_get_home_dir`, `pal_is_tty`
     - _Requirements: 15.4, 6.2_
 
-- [ ] 3. Implement Output Renderer
-  - [~] 3.1 Implement output system (`src/core/output.c`)
+- [x] 3. Implement Output Renderer
+  - [x] 3.1 Implement output system (`src/core/output.c`)
     - Implement `output_init` with TTY detection, color mode, and log level configuration
     - Implement `output_log` with ANSI color codes: red for ERROR, yellow for WARN, green for success, default for INFO
     - Implement `cdo_error`, `cdo_warn`, `cdo_info`, `cdo_debug`, `cdo_trace` macros
     - When stdout is not a TTY, default to no colors and no progress animations
     - _Requirements: 14.1, 14.3, 14.4, 14.5, 14.6, 14.7_
 
-  - [~] 3.2 Implement progress bar (`src/core/output.c`)
+  - [x] 3.2 Implement progress bar (`src/core/output.c`)
     - Implement `progress_create`, `progress_update`, `progress_finish`
     - Display completed/total count and a visual bar during compilation and downloads
     - Suppress progress animations when not a TTY
     - _Requirements: 14.2, 6.4_
 
-  - [~] 3.3 Write property test for quiet mode filtering
+  - [x] 3.3 Write property test for quiet mode filtering
     - **Property 16: Quiet Mode Filters Non-Errors**
     - **Validates: Requirements 14.3**
 
-- [ ] 4. Implement TOML Parser
-  - [~] 4.1 Implement TOML parser core (`src/core/toml.c`)
+- [x] 4. Implement TOML Parser
+  - [x] 4.1 Implement TOML parser core (`src/core/toml.c`)
     - Write a recursive-descent parser for TOML v1.0
     - Support all TOML types: string, integer, float, bool, datetime, array, table, inline table
     - Implement `toml_parse` with error reporting (line, col, message)
@@ -74,32 +74,32 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Maintain UTF-8 handling capability
     - _Requirements: 3.1, 3.3, 3.4_
 
-  - [~] 4.2 Implement TOML serializer (`src/core/toml.c`)
+  - [x] 4.2 Implement TOML serializer (`src/core/toml.c`)
     - Implement `toml_serialize` to convert in-memory DOM back to TOML text
     - Ensure round-trip fidelity for all value types
     - _Requirements: 3.5_
 
-  - [~] 4.3 Write property test for TOML round-trip
+  - [x] 4.3 Write property test for TOML round-trip
     - **Property 1: TOML Round-Trip**
     - **Validates: Requirements 3.5, 3.4**
 
-  - [~] 4.4 Write property test for TOML error location accuracy
+  - [x] 4.4 Write property test for TOML error location accuracy
     - **Property 2: TOML Error Location Accuracy**
     - **Validates: Requirements 3.3**
 
-- [ ] 5. Implement JSON Parser
-  - [~] 5.1 Implement JSON parser (`src/core/json.c`)
+- [x] 5. Implement JSON Parser
+  - [x] 5.1 Implement JSON parser (`src/core/json.c`)
     - Write a minimal JSON parser supporting null, bool, number, string, array, object
     - Implement `json_parse`, `json_get`, `json_free`
     - Report parse errors with line/col
     - _Requirements: 17.3_
 
-- [~] 6. Checkpoint - Core parsers and PAL
+- [x] 6. Checkpoint - Core parsers and PAL
   - Ensure all tests pass with `cdo test`, ask the user if questions arise.
   - Note: If the old CDo has issues building or testing at this point, fix them before proceeding.
 
-- [ ] 7. Implement CLI Parser
-  - [~] 7.1 Implement CLI argument parsing (`src/core/cli.c`)
+- [x] 7. Implement CLI Parser
+  - [x] 7.1 Implement CLI argument parsing (`src/core/cli.c`)
     - Implement `cdo_cli_parse` to parse argv into `CdoOptions` struct
     - Recognize all commands: build, run, test, clean, new, init, add, remove, source, shader, tool, doctor, self
     - Parse global options: --verbose, --quiet, --log-level, --color, --help, --release, --profile, --jobs
@@ -107,43 +107,43 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - No heap allocation on the common path
     - _Requirements: 1.1, 1.3, 1.4, 1.5_
 
-  - [~] 7.2 Implement command suggestion for typos (`src/core/cli.c`)
+  - [x] 7.2 Implement command suggestion for typos (`src/core/cli.c`)
     - Implement `cdo_cli_suggest` using Levenshtein edit distance
     - When an unrecognized command is provided, suggest similar commands
     - _Requirements: 1.2_
 
-  - [~] 7.3 Implement help text generation (`src/core/cli.c`)
+  - [x] 7.3 Implement help text generation (`src/core/cli.c`)
     - Implement `cdo_cli_print_help` for each command
     - Print summary of available commands when invoked with no command
     - Exit with status code 0 for --help, non-zero for error-triggered usage display
     - _Requirements: 1.4, 1.5_
 
-  - [~] 7.4 Write property test for CLI suggestion relevance
+  - [x] 7.4 Write property test for CLI suggestion relevance
     - **Property 8: CLI Suggestion Relevance**
     - **Validates: Requirements 1.2**
 
-  - [~] 7.5 Write property test for global options parsing
+  - [x] 7.5 Write property test for global options parsing
     - **Property 9: Global Options Parsing**
     - **Validates: Requirements 1.3**
 
-- [ ] 8. Implement Source Scanner
-  - [~] 8.1 Implement source file discovery (`src/core/scanner.c`)
+- [x] 8. Implement Source Scanner
+  - [x] 8.1 Implement source file discovery (`src/core/scanner.c`)
     - Implement `scanner_scan_sources` to recursively find `.c`, `.cpp`, `.h`, `.hpp` in `src/`
     - Implement `scanner_scan_headers` to find headers in `include/`
     - Implement exclude pattern matching (glob patterns from crate manifest)
     - Implement `filelist_free`
     - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-  - [~] 8.2 Write property test for source scanner completeness
+  - [x] 8.2 Write property test for source scanner completeness
     - **Property 10: Source Scanner Completeness**
     - **Validates: Requirements 7.1**
 
-  - [~] 8.3 Write property test for exclude pattern filtering
+  - [x] 8.3 Write property test for exclude pattern filtering
     - **Property 11: Exclude Pattern Filtering**
     - **Validates: Requirements 7.2**
 
-- [ ] 9. Implement Thread Pool
-  - [~] 9.1 Implement work-stealing thread pool (`src/core/threadpool.c`)
+- [x] 9. Implement Thread Pool
+  - [x] 9.1 Implement work-stealing thread pool (`src/core/threadpool.c`)
     - Implement `threadpool_create` (use `pal_cpu_count` for default)
     - Implement `threadpool_submit` to enqueue tasks
     - Implement `threadpool_wait` to block until all tasks complete
@@ -151,73 +151,73 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Use platform threads (Windows: `CreateThread`, POSIX: `pthread_create`)
     - _Requirements: 6.1, 6.2, 6.3_
 
-  - [~] 9.2 Write property test for thread pool task completion
+  - [x] 9.2 Write property test for thread pool task completion
     - **Property 12: Thread Pool Task Completion**
     - **Validates: Requirements 6.1**
 
-- [ ] 10. Implement Workspace Resolver
-  - [~] 10.1 Implement workspace loading (`src/core/workspace.c`)
+- [x] 10. Implement Workspace Resolver
+  - [x] 10.1 Implement workspace loading (`src/core/workspace.c`)
     - Implement `workspace_load` to parse `cdo.toml` and discover crates
     - Parse each crate's `crate.toml` to populate `Crate` structs
     - Support crate types: executable, static-library, shared-library, test
     - Support config file fallback order: .toml, .yaml, .json
     - _Requirements: 2.1, 2.2, 2.4, 3.2_
 
-  - [~] 10.2 Implement dependency graph and topological sort (`src/core/workspace.c`)
+  - [x] 10.2 Implement dependency graph and topological sort (`src/core/workspace.c`)
     - Implement `workspace_resolve` with topological sort (Kahn's algorithm)
     - Detect circular dependencies and report the cycle path
     - Compute transitive dependency closure for partial builds
     - _Requirements: 2.3, 2.5, 4.1, 4.2_
 
-  - [~] 10.3 Write property test for topological sort ordering
+  - [x] 10.3 Write property test for topological sort ordering
     - **Property 3: Topological Sort Ordering**
     - **Validates: Requirements 2.3**
 
-  - [~] 10.4 Write property test for circular dependency detection
+  - [x] 10.4 Write property test for circular dependency detection
     - **Property 4: Circular Dependency Detection**
     - **Validates: Requirements 2.5**
 
-  - [~] 10.5 Write property test for transitive dependency closure
+  - [x] 10.5 Write property test for transitive dependency closure
     - **Property 5: Transitive Dependency Closure**
     - **Validates: Requirements 4.2**
 
-- [~] 11. Checkpoint - Core subsystems complete
+- [x] 11. Checkpoint - Core subsystems complete
   - Ensure all tests pass with `cdo test`, ask the user if questions arise.
   - Verify the new CDo binary still builds correctly with `cdo build cdo`.
 
-- [ ] 12. Implement Compiler Driver
-  - [~] 12.1 Implement compiler detection (`src/core/compiler.c`)
+- [x] 12. Implement Compiler Driver
+  - [x] 12.1 Implement compiler detection (`src/core/compiler.c`)
     - Implement `compiler_detect` to find GCC, Clang, or MSVC on system PATH
     - Determine compiler family, path, version, and linker path
     - _Requirements: 5.2_
 
-  - [~] 12.2 Implement incremental compilation (dirty set) (`src/core/compiler.c`)
+  - [x] 12.2 Implement incremental compilation (dirty set) (`src/core/compiler.c`)
     - Implement `compiler_compute_dirty` using source/header modification timestamps
     - Parse compiler-generated dependency files (-MMD for GCC/Clang, /showIncludes for MSVC)
     - Fall back to full rebuild if timestamp tracking fails or is corrupted
     - _Requirements: 5.3, 5.4_
 
-  - [~] 12.3 Write property test for timestamp-based dirty set correctness
+  - [x] 12.3 Write property test for timestamp-based dirty set correctness
     - **Property 6: Timestamp-Based Dirty Set Correctness**
     - **Validates: Requirements 5.3, 9.1, 9.2, 9.3, 9.4**
 
-  - [~] 12.4 Implement compile command generation and batch execution (`src/core/compiler.c`)
+  - [x] 12.4 Implement compile command generation and batch execution (`src/core/compiler.c`)
     - Implement `compiler_compile_batch` to generate compiler commands with correct include paths, defines, flags, C/C++ standard
     - Dispatch compilation jobs to the thread pool for parallel execution
     - Support configurable C standard (C11, C17, C23) and C++ standard (C++17, C++20, C++23)
     - _Requirements: 5.1, 5.6, 6.1_
 
-  - [~] 12.5 Write property test for compiler command completeness
+  - [x] 12.5 Write property test for compiler command completeness
     - **Property 7: Compiler Command Completeness**
     - **Validates: Requirements 5.1, 22.1, 22.2, 22.3, 22.4**
 
-  - [~] 12.6 Implement linking (`src/core/compiler.c`)
+  - [x] 12.6 Implement linking (`src/core/compiler.c`)
     - Implement `compiler_link` for executables and libraries (static and shared)
     - Generate correct linker invocation per compiler family
     - _Requirements: 5.5_
 
-- [ ] 13. Implement HTTP Client
-  - [~] 13.1 Implement HTTPS download with retry (`src/core/http.c`)
+- [x] 13. Implement HTTP Client
+  - [x] 13.1 Implement HTTPS download with retry (`src/core/http.c`)
     - Implement `http_download` with platform-native TLS (Schannel on Windows, system OpenSSL on POSIX)
     - Implement exponential backoff retry (up to 3 retries)
     - Report URL and HTTP status on failure
@@ -225,17 +225,17 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Fall back to invoking curl/wget if native TLS unavailable
     - _Requirements: 25.1, 25.2, 25.3, 25.4, 25.5_
 
-  - [~] 13.2 Implement HTTP GET for metadata (`src/core/http.c`)
+  - [x] 13.2 Implement HTTP GET for metadata (`src/core/http.c`)
     - Implement `http_get` to fetch small payloads (registry metadata) into memory
     - Implement `http_response_free`
     - _Requirements: 25.1_
 
-  - [~] 13.3 Write property test for retry logic correctness
+  - [x] 13.3 Write property test for retry logic correctness
     - **Property 17: Retry Logic Correctness**
     - **Validates: Requirements 25.2**
 
-- [ ] 14. Implement Archive Extractor
-  - [~] 14.1 Implement ZIP extraction (`src/core/archive.c`)
+- [x] 14. Implement Archive Extractor
+  - [x] 14.1 Implement ZIP extraction (`src/core/archive.c`)
     - Implement `archive_extract_zip` without external tools
     - Parse ZIP local file headers and central directory
     - Support DEFLATE decompression
@@ -243,19 +243,19 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Report corrupted archives with file path
     - _Requirements: 19.1, 19.3, 19.5_
 
-  - [~] 14.2 Implement tar.gz extraction (`src/core/archive.c`)
+  - [x] 14.2 Implement tar.gz extraction (`src/core/archive.c`)
     - Implement `archive_extract_targz` without external tools
     - Decompress gzip layer, then parse tar headers
     - Preserve directory structure and POSIX file permissions
     - On Windows, ignore permissions
     - _Requirements: 19.2, 19.3, 19.4, 19.5_
 
-  - [~] 14.3 Write property test for archive structure preservation
+  - [x] 14.3 Write property test for archive structure preservation
     - **Property 18: Archive Structure Preservation**
     - **Validates: Requirements 19.1, 19.2, 19.3**
 
-- [ ] 15. Implement Dependency Resolver
-  - [~] 15.1 Implement dependency resolution and caching (`src/core/deps.c`)
+- [x] 15. Implement Dependency Resolver
+  - [x] 15.1 Implement dependency resolution and caching (`src/core/deps.c`)
     - Implement `dep_resolve` to check local cache first, download if needed
     - Support registry, Git, and local filesystem dependency sources
     - Maintain machine-wide cache in `~/.cdo/cache/`
@@ -263,29 +263,29 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Copy runtime DLLs to output directory
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.7, 12.1, 12.2, 12.3_
 
-  - [~] 15.2 Implement lock file management (`src/core/deps.c`)
+  - [x] 15.2 Implement lock file management (`src/core/deps.c`)
     - Implement `dep_lock_write` to record exact dependency versions
     - Implement `dep_lock_read` to restore pinned versions
     - Support pkg-config, CMake package config, and CDo-native metadata
     - _Requirements: 11.5, 12.4_
 
-  - [~] 15.3 Write property test for lock file round-trip
+  - [x] 15.3 Write property test for lock file round-trip
     - **Property 14: Lock File Round-Trip**
     - **Validates: Requirements 11.5**
 
-- [ ] 16. Implement Template Engine
-  - [~] 16.1 Implement template rendering (`src/core/template.c`)
+- [x] 16. Implement Template Engine
+  - [x] 16.1 Implement template rendering (`src/core/template.c`)
     - Implement `template_render` with variable substitution (project name, crate name, author, year, custom vars)
     - Implement conditional section processing (include/exclude sections based on variable truth)
     - Remove all placeholder markers from output
     - _Requirements: 13.2, 13.3_
 
-  - [~] 16.2 Write property test for template rendering correctness
+  - [x] 16.2 Write property test for template rendering correctness
     - **Property 13: Template Rendering Correctness**
     - **Validates: Requirements 13.2, 13.3**
 
-- [ ] 17. Implement Shader Compiler
-  - [~] 17.1 Implement incremental shader compilation (`src/core/shader.c`)
+- [x] 17. Implement Shader Compiler
+  - [x] 17.1 Implement incremental shader compilation (`src/core/shader.c`)
     - Compare source file mtime against compiled output mtime
     - Skip compilation when source is older than or equal to output
     - Recompile when source is newer or output doesn't exist
@@ -293,12 +293,12 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Report compiled/skipped counts
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
 
-- [~] 18. Checkpoint - All core subsystems complete
+- [x] 18. Checkpoint - All core subsystems complete
   - Ensure all tests pass with `cdo test`, ask the user if questions arise.
   - Rebuild with `cdo build cdo` and verify the binary is functional.
 
-- [ ] 19. Implement Command Handlers
-  - [~] 19.1 Implement build command (`src/commands/cmd_build.c`)
+- [x] 19. Implement Command Handlers
+  - [x] 19.1 Implement build command (`src/commands/cmd_build.c`)
     - Build all crates when no argument provided (dependency order)
     - Build specific crates + transitive deps when names provided
     - Report error and exit non-zero for unknown crate names
@@ -306,41 +306,41 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Display progress (completed/total compilation units)
     - _Requirements: 4.1, 4.2, 4.3, 22.1, 22.2, 22.3, 22.4_
 
-  - [~] 19.2 Implement run command (`src/commands/cmd_run.c`)
+  - [x] 19.2 Implement run command (`src/commands/cmd_run.c`)
     - Build specified crate before executing
     - Forward arguments after `--` to the executable
     - Abort if build fails
     - Auto-select single executable crate; error if multiple
     - _Requirements: 23.1, 23.2, 23.3, 23.4, 23.5_
 
-  - [~] 19.3 Implement test command (`src/commands/cmd_test.c`)
+  - [x] 19.3 Implement test command (`src/commands/cmd_test.c`)
     - Build and run all test crates when no argument
     - Build and run specific test crate when name provided
     - Report build errors without executing; report non-zero exit as failure
     - Print summary of passed/failed test counts
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
 
-  - [~] 19.4 Implement clean command (`src/commands/cmd_clean.c`)
+  - [x] 19.4 Implement clean command (`src/commands/cmd_clean.c`)
     - Delete entire build directory when no argument
     - Delete specific crate's artifacts when name provided
     - Print "nothing to clean" if directory doesn't exist; exit 0
     - Exit non-zero if clean operation fails for other reasons
     - _Requirements: 10.1, 10.2, 10.3_
 
-  - [~] 19.5 Implement new/init commands (`src/commands/cmd_new.c`)
+  - [x] 19.5 Implement new/init commands (`src/commands/cmd_new.c`)
     - Fetch template from skeleton catalog (local `~/.cdo/templates/` or remote)
     - Instantiate template with variable substitution
     - Support --list to display available templates
     - Refuse to create in non-empty directory unless --force
     - _Requirements: 13.1, 13.2, 13.3, 13.4, 13.5, 13.6_
 
-  - [~] 19.6 Implement add/remove commands (`src/commands/cmd_deps.c`)
+  - [x] 19.6 Implement add/remove commands (`src/commands/cmd_deps.c`)
     - Search registries for package on add
     - Download to local cache; add to crate manifest
     - Remove from manifest and regenerate lock file on remove
     - _Requirements: 11.2, 11.3, 11.4, 11.5, 11.6_
 
-  - [~] 19.7 Implement tool command (`src/commands/cmd_tool.c`)
+  - [x] 19.7 Implement tool command (`src/commands/cmd_tool.c`)
     - Download tool archive to local cache
     - Skip download if cached (unless --refresh)
     - Extract into `.cdo/tools/`
@@ -348,7 +348,7 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Support HTTPS download with fallback
     - _Requirements: 20.1, 20.2, 20.3, 20.4, 20.5_
 
-  - [~] 19.8 Implement doctor command (`src/commands/cmd_doctor.c`)
+  - [x] 19.8 Implement doctor command (`src/commands/cmd_doctor.c`)
     - Check for C/C++ compiler on PATH
     - Verify dependencies resolved and present
     - Verify manifest files syntactically valid
@@ -357,25 +357,25 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Exit 0 if all pass, non-zero if any fail
     - _Requirements: 21.1, 21.2, 21.3, 21.4, 21.5, 21.6_
 
-  - [~] 19.9 Implement shader command (`src/commands/cmd_shader.c`)
+  - [x] 19.9 Implement shader command (`src/commands/cmd_shader.c`)
     - Wire shader compiler into the command handler
     - Verify DXC tool is installed (suggest `cdo tool install dxc` if missing)
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 20.6_
 
-- [ ] 20. Implement Error Reporting Enhancements
-  - [~] 20.1 Implement compiler error hints (`src/core/errors.c`)
+- [x] 20. Implement Error Reporting Enhancements
+  - [x] 20.1 Implement compiler error hints (`src/core/errors.c`)
     - Scan compiler error output for common patterns (missing header, undefined symbol, linker error)
     - Append CDo-specific hint suggesting resolution (e.g., `cdo add <package>`)
     - Preserve original compiler/linker error text unmodified
     - Display clear message for internal CDo errors with bug report suggestion
     - _Requirements: 24.1, 24.2, 24.3, 24.4, 24.5_
 
-- [~] 21. Checkpoint - All commands implemented
+- [x] 21. Checkpoint - All commands implemented
   - Ensure all tests pass with `cdo test`, ask the user if questions arise.
   - Do a full rebuild with `cdo build cdo` and smoke-test key commands.
 
-- [ ] 22. Wire main entry point and integration
-  - [~] 22.1 Wire main.c command dispatch (`src/main.c`)
+- [x] 22. Wire main entry point and integration
+  - [x] 22.1 Wire main.c command dispatch (`src/main.c`)
     - Parse CLI args via `cdo_cli_parse`
     - Initialize output renderer with parsed color/log-level/TTY settings
     - Dispatch to appropriate command handler based on parsed command
@@ -383,19 +383,19 @@ This plan implements CDo as a self-contained C17 binary that replaces CMake and 
     - Ensure startup completes and begins arg parsing within 5ms
     - _Requirements: 16.1, 16.2, 16.3, 1.1_
 
-  - [~] 22.2 Implement build profile wiring
+  - [x] 22.2 Implement build profile wiring
     - Load workspace profiles from manifest (debug/release/custom)
     - Pass profile settings (optimize, debug, defines, flags) through to compiler driver
     - Default to debug profile when no flags specified
     - _Requirements: 22.1, 22.2, 22.3, 22.4_
 
-  - [~] 22.3 Write unit tests for command integration
+  - [x] 22.3 Write unit tests for command integration
     - Test CLI → command handler dispatch for each command
     - Test build profile selection logic
     - Test error propagation from subsystems to exit codes
     - _Requirements: 1.1, 18.3_
 
-- [~] 23. Final checkpoint - Full integration verified
+- [x] 23. Final checkpoint - Full integration verified
   - Ensure all tests pass with `cdo test`, ask the user if questions arise.
   - Perform a clean build with `cdo build cdo` and verify the new CDo binary can build itself (self-hosting milestone).
 
