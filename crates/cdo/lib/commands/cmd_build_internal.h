@@ -155,6 +155,28 @@ int build_test_module(const Workspace* ws, Crate* crate,
                       ProgressBar* progress,
                       int* completed_units);
 
+/// Build (copy) the Resource_Module for a crate.
+/// Performs incremental copy from res/ to build/<profile>/<crate>/res/.
+/// Removes stale files not present in source.
+int build_resource_module(const Workspace* ws, Crate* crate,
+                          const char* profile,
+                          ProgressBar* progress,
+                          int* completed_units);
+
+/// Build (compile) the Shader_Module for a crate using DXC.
+/// Performs incremental compilation of .hlsl → .dxil.
+int build_shader_module(const Workspace* ws, Crate* crate,
+                        const char* profile,
+                        const BuildProfile* build_prof,
+                        bool force,
+                        ProgressBar* progress,
+                        int* completed_units);
+
+/// Propagate dependency module outputs (res, shd, dyn) into the
+/// dependent crate's build directory. Detects conflicts.
+int propagate_dep_modules(const Workspace* ws, Crate* crate,
+                          const char* profile);
+
 #ifdef __cplusplus
 }
 #endif

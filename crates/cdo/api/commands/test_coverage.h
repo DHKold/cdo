@@ -25,6 +25,11 @@ typedef struct {
 /// If gcov is not found in PATH, prints an error and returns -2.
 int coverage_run_gcov(const char *build_dir, FileCoverage *out, int max_files);
 
+/// Run gcov and filter results to workspace sources only.
+/// ws_root: workspace root path for source filtering.
+/// Only files under <ws_root>/crates/ are included.
+int coverage_run_gcov_filtered(const char *build_dir, const char *ws_root, FileCoverage *out, int max_files);
+
 /// Compute aggregate coverage percentage from an array of FileCoverage.
 /// Returns sum(lines_hit) / sum(lines_total) * 100.0, or 0.0 if total is 0.
 double coverage_aggregate(const FileCoverage *files, int count);

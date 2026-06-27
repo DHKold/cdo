@@ -64,4 +64,6 @@ To test a create (run the tests) use:
 .\cdo.exe test <crate>
 ```
 
+To get the coverage, use the `--coverage` argument
+
 Check the test help for more information

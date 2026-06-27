@@ -256,12 +256,12 @@ int pal_rmdir_r(const char* path) {
 }
 
 int pal_path_exists(const char* path) {
-    if (!path) return 1;
+    if (!path || path[0] == '\0') return PAL_ERR_NOT_FOUND;
     wchar_t* wpath = utf8_to_wide(path);
-    if (!wpath) return 1;
+    if (!wpath) return PAL_ERR_NOT_FOUND;
     DWORD attrs = GetFileAttributesW(wpath);
     free(wpath);
-    return (attrs != INVALID_FILE_ATTRIBUTES) ? 0 : 1;
+    return (attrs != INVALID_FILE_ATTRIBUTES) ? PAL_OK : PAL_ERR_NOT_FOUND;
 }
 
 int pal_file_read(const char* path, char** buf, size_t* len) {
@@ -500,9 +500,9 @@ int pal_rmdir_r(const char* path) {
 }
 
 int pal_path_exists(const char* path) {
-    if (!path) return 0;
+    if (!path || path[0] == '\0') return PAL_ERR_NOT_FOUND;
     struct stat st;
-    return (stat(path, &st) == 0) ? 1 : 0;
+    return (stat(path, &st) == 0) ? PAL_OK : PAL_ERR_NOT_FOUND;
 }
 
 int pal_file_read(const char* path, char** buf, size_t* len) {

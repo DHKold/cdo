@@ -14,17 +14,17 @@
 
 static const char *KNOWN_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
-    "shader", "tool", "doctor",
+    "tool", "doctor",
     "deps", "catalog", "help",
 };
-#define KNOWN_COMMAND_COUNT 12
+#define KNOWN_COMMAND_COUNT 11
 
 static const char *SUGGESTABLE_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
-    "shader", "tool", "doctor",
+    "tool", "doctor",
     "deps", "catalog",
 };
-#define SUGGESTABLE_COMMAND_COUNT 11
+#define SUGGESTABLE_COMMAND_COUNT 10
 
 static int cli_suggest_threshold(const char *input) {
     int input_len = (int)strlen(input);

@@ -254,6 +254,114 @@ double coverage_aggregate(const FileCoverage *files, int count) {
     return (double)sum_hit / (double)sum_total * 100.0;
 }
 
+// ---------------------------------------------------------------------------
+// Filtered coverage: only workspace sources under <ws_root>/crates/
+// ---------------------------------------------------------------------------
+
+/// Normalize a path buffer in-place: backslash → forward slash.
+static void normalize_slashes(char *path) {
+    for (char *p = path; *p != '\0'; p++) {
+        if (*p == '\\') *p = '/';
+    }
+}
+
+/// Check if a path is absolute (drive letter on Windows, or starts with /).
+static bool is_absolute_path(const char *path) {
+    if (!path || path[0] == '\0') return false;
+#ifdef _WIN32
+    // Drive letter: C:/ or C:\.
+    if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && (path[2] == '/' || path[2] == '\\'))
+        return true;
+    // UNC path
+    if (path[0] == '\\' && path[1] == '\\') return true;
+    if (path[0] == '/' && path[1] == '/') return true;
+#endif
+    if (path[0] == '/') return true;
+    return false;
+}
+
+int coverage_run_gcov_filtered(const char *build_dir, const char *ws_root, FileCoverage *out, int max_files) {
+    if (!build_dir || !ws_root || !out || max_files <= 0) return -1;
+
+    // Get raw coverage results
+    int raw_count = coverage_run_gcov(build_dir, out, max_files);
+    if (raw_count <= 0) return raw_count;
+
+    // Resolve ws_root to an absolute path so it matches gcov's absolute file paths.
+    // gcov reports absolute source paths (e.g., C:/Workspace/.../crates/cdo/lib/foo.c)
+    // but ws_root may be relative (e.g., ".").
+    char abs_root[512];
+#ifdef _WIN32
+    if (_fullpath(abs_root, ws_root, sizeof(abs_root)) == NULL) {
+        strncpy(abs_root, ws_root, sizeof(abs_root) - 1);
+        abs_root[sizeof(abs_root) - 1] = '\0';
+    }
+#else
+    char *rp = realpath(ws_root, NULL);
+    if (rp) {
+        strncpy(abs_root, rp, sizeof(abs_root) - 1);
+        abs_root[sizeof(abs_root) - 1] = '\0';
+        free(rp);
+    } else {
+        strncpy(abs_root, ws_root, sizeof(abs_root) - 1);
+        abs_root[sizeof(abs_root) - 1] = '\0';
+    }
+#endif
+
+    // Build the inclusion prefix: <abs_root>/crates/
+    char prefix[512];
+    strncpy(prefix, abs_root, sizeof(prefix) - 1);
+    prefix[sizeof(prefix) - 1] = '\0';
+    normalize_slashes(prefix);
+
+    // Ensure prefix ends with /crates/
+    size_t ws_len = strlen(prefix);
+    // Remove trailing slash from ws_root if present
+    if (ws_len > 0 && prefix[ws_len - 1] == '/') {
+        prefix[ws_len - 1] = '\0';
+        ws_len--;
+    }
+
+    // Append /crates/
+    if (ws_len + 8 >= sizeof(prefix)) return -1; // overflow guard
+    strcat(prefix, "/crates/");
+    size_t prefix_len = strlen(prefix);
+    // Filter in-place
+    int kept = 0;
+    for (int i = 0; i < raw_count; i++) {
+        // Resolve to absolute path if relative
+        char resolved[512];
+        if (is_absolute_path(out[i].file)) {
+            strncpy(resolved, out[i].file, sizeof(resolved) - 1);
+            resolved[sizeof(resolved) - 1] = '\0';
+        } else {
+            if (pal_path_join(resolved, sizeof(resolved), ws_root, out[i].file) != 0) {
+                continue; // skip on overflow
+            }
+        }
+
+        // Normalize path separators to forward slash
+        normalize_slashes(resolved);
+
+        // Check if the resolved path starts with the inclusion prefix
+        bool match;
+#ifdef _WIN32
+        match = (_strnicmp(resolved, prefix, prefix_len) == 0);
+#else
+        match = (strncmp(resolved, prefix, prefix_len) == 0);
+#endif
+
+        if (match) {
+            if (kept != i) {
+                out[kept] = out[i];
+            }
+            kept++;
+        }
+    }
+
+    return kept;
+}
+
 void coverage_display(const FileCoverage *files, int count,
                       double aggregate_pct, bool use_color) {
     if (!files || count <= 0) {

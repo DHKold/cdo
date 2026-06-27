@@ -278,7 +278,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
         pal_path_normalize(obj_path);
 
         // Check if object exists and get its mtime
-        if (pal_path_exists(obj_path)) {
+        if (pal_path_exists(obj_path) == 0) {
             u->object_exists = true;
             if (pal_file_mtime(obj_path, &u->object_mtime) != PAL_OK) {
                 cdo_warn("Cannot stat object file '%s', triggering full rebuild", obj_path);
@@ -303,7 +303,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
         u->header_mtimes = NULL;
         u->header_dep_count = 0;
 
-        if (pal_path_exists(dep_path)) {
+        if (pal_path_exists(dep_path) == 0) {
             char* dep_content = NULL;
             size_t dep_len = 0;
             if (pal_file_read(dep_path, &dep_content, &dep_len) == PAL_OK && dep_content) {

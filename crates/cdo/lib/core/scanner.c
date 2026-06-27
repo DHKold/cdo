@@ -144,6 +144,10 @@ static bool is_compilable_ext(const char* ext) {
             strcmp(ext, ".cpp") == 0);
 }
 
+static bool is_hlsl_ext(const char* ext) {
+    return (strcmp(ext, ".hlsl") == 0);
+}
+
 static bool is_header_ext(const char* ext) {
     return (strcmp(ext, ".h") == 0 ||
             strcmp(ext, ".hpp") == 0);
@@ -362,6 +366,52 @@ static void module_scan_callback(const char* entry_path, bool is_dir, void* ctx)
     free(normalized);
 }
 
+/**
+ * Callback for MODULE_RES scanning: accepts ALL files (no extension filter).
+ */
+static void res_scan_callback(const char* entry_path, bool is_dir, void* ctx) {
+    ScanContext* sc = (ScanContext*)ctx;
+    if (sc->error) return;
+    if (is_dir) return;
+
+    size_t entry_len = strlen(entry_path);
+    char* normalized = (char*)malloc(entry_len + 1);
+    if (!normalized) { sc->error = 1; return; }
+    memcpy(normalized, entry_path, entry_len + 1);
+    pal_path_normalize(normalized);
+
+    if (filelist_add(sc->out, normalized) != 0) {
+        sc->error = 1;
+    }
+    free(normalized);
+}
+
+/**
+ * Callback for MODULE_SHD scanning: accepts only .hlsl files.
+ */
+static void shd_scan_callback(const char* entry_path, bool is_dir, void* ctx) {
+    ScanContext* sc = (ScanContext*)ctx;
+    if (sc->error) return;
+    if (is_dir) return;
+
+    size_t entry_len = strlen(entry_path);
+    char* normalized = (char*)malloc(entry_len + 1);
+    if (!normalized) { sc->error = 1; return; }
+    memcpy(normalized, entry_path, entry_len + 1);
+    pal_path_normalize(normalized);
+
+    const char* ext = pal_path_ext(normalized);
+    if (!is_hlsl_ext(ext)) {
+        free(normalized);
+        return;
+    }
+
+    if (filelist_add(sc->out, normalized) != 0) {
+        sc->error = 1;
+    }
+    free(normalized);
+}
+
 int scanner_scan_module_sources(const char* module_dir, int kind,
                                 const char** exclude_patterns,
                                 int exclude_count, FileList* out) {
@@ -424,6 +474,8 @@ static const char* MODULE_DIR_NAMES[MODULE_KIND_COUNT] = {
     "dyn",  // MODULE_DYN
     "tst",  // MODULE_TST
     "api",  // MODULE_API
+    "res",  // MODULE_RES
+    "shd",  // MODULE_SHD
 };
 
 int scanner_scan_modules(const char* crate_path, Crate* crate,
@@ -454,6 +506,70 @@ int scanner_scan_modules(const char* crate_path, Crate* crate,
             crate->modules[i].sources.capacity = 0;
             // artifact_path left empty for now (computed during build)
             crate->modules[i].artifact_path[0] = '\0';
+
+            // Scan files for MODULE_RES and MODULE_SHD immediately
+            if (i == MODULE_RES) {
+                FileList fl;
+                if (filelist_init(&fl) != 0) return 1;
+                size_t dir_len = strlen(dir_path);
+                char* norm_dir = (char*)malloc(dir_len + 1);
+                if (!norm_dir) { filelist_free(&fl); return 1; }
+                memcpy(norm_dir, dir_path, dir_len + 1);
+                pal_path_normalize(norm_dir);
+                size_t norm_len = strlen(norm_dir);
+                while (norm_len > 0 && norm_dir[norm_len - 1] == '/') {
+                    norm_dir[--norm_len] = '\0';
+                }
+                ScanContext ctx = {
+                    .out = &fl,
+                    .base_path = norm_dir,
+                    .base_len = norm_len,
+                    .crate_path = norm_dir,
+                    .crate_len = norm_len,
+                    .exclude_patterns = NULL,
+                    .exclude_count = 0,
+                    .check_sources = false,
+                    .error = 0,
+                };
+                int walk_rc = pal_dir_walk(norm_dir, res_scan_callback, &ctx);
+                free(norm_dir);
+                if (walk_rc != PAL_OK || ctx.error) {
+                    filelist_free(&fl);
+                    return 1;
+                }
+                crate->modules[i].sources = fl;
+            } else if (i == MODULE_SHD) {
+                FileList fl;
+                if (filelist_init(&fl) != 0) return 1;
+                size_t dir_len = strlen(dir_path);
+                char* norm_dir = (char*)malloc(dir_len + 1);
+                if (!norm_dir) { filelist_free(&fl); return 1; }
+                memcpy(norm_dir, dir_path, dir_len + 1);
+                pal_path_normalize(norm_dir);
+                size_t norm_len = strlen(norm_dir);
+                while (norm_len > 0 && norm_dir[norm_len - 1] == '/') {
+                    norm_dir[--norm_len] = '\0';
+                }
+                ScanContext ctx = {
+                    .out = &fl,
+                    .base_path = norm_dir,
+                    .base_len = norm_len,
+                    .crate_path = norm_dir,
+                    .crate_len = norm_len,
+                    .exclude_patterns = NULL,
+                    .exclude_count = 0,
+                    .check_sources = false,
+                    .error = 0,
+                };
+                int walk_rc = pal_dir_walk(norm_dir, shd_scan_callback, &ctx);
+                free(norm_dir);
+                if (walk_rc != PAL_OK || ctx.error) {
+                    filelist_free(&fl);
+                    return 1;
+                }
+                crate->modules[i].sources = fl;
+            }
+
             module_count++;
         } else {
             crate->modules[i].kind = (ModuleKind)i;
@@ -469,6 +585,8 @@ int scanner_scan_modules(const char* crate_path, Crate* crate,
     crate->module_count = module_count;
     crate->has_lib = crate->modules[MODULE_LIB].present;
     crate->has_api = crate->modules[MODULE_API].present;
+    crate->has_res = crate->modules[MODULE_RES].present;
+    crate->has_shd = crate->modules[MODULE_SHD].present;
 
     // Error if no module directories found
     if (module_count == 0) {

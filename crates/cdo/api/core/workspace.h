@@ -26,10 +26,12 @@ typedef struct Crate {
     int             cpp_standard;   // 17, 20, 23
 
     // Module layout (replaces CrateType)
-    Module          modules[5];     // indexed by ModuleKind
-    int             module_count;   // number of present modules (1-5)
+    Module          modules[MODULE_KIND_COUNT];     // indexed by ModuleKind
+    int             module_count;   // number of present modules (1-7)
     bool            has_lib;        // shortcut: modules[MODULE_LIB].present
     bool            has_api;        // shortcut: modules[MODULE_API].present
+    bool            has_res;        // shortcut: modules[MODULE_RES].present
+    bool            has_shd;        // shortcut: modules[MODULE_SHD].present
 
     // Dependencies (unchanged)
     int             dep_count;

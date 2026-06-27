@@ -261,7 +261,6 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "  init      Initialize a project in current directory\n"
             "  deps      Manage dependencies (add, remove, list)\n"
             "  catalog   Browse and search the package/tool catalog\n"
-            "  shader    Compile shaders\n"
             "  tool      Manage vendored tools\n"
             "  doctor    Diagnose environment issues\n\n"
             "Options:\n"
@@ -380,19 +379,7 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
         );
         break;
     case CDO_CMD_SHADER:
-        fprintf(out,
-            "Compile shaders\n\n"
-            "Usage: cdo shader [OPTIONS] [FILES...]\n\n"
-            "Arguments:\n"
-            "  [FILES...]  Shader files to compile (default: all)\n\n"
-            "Options:\n"
-            "      --target TARGET    Output format (dxil|spirv)\n"
-            "  -v, --verbose          Enable verbose output\n"
-            "  -h, --help             Print help information\n\n"
-            "Examples:\n"
-            "  cdo shader             Compile all shaders\n"
-            "  cdo shader vertex.hlsl Compile a specific shader\n"
-        );
+        // Deprecated: shader command removed, handled by deprecation message in dispatch
         break;
     case CDO_CMD_TOOL:
         fprintf(out,

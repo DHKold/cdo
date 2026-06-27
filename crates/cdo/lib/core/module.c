@@ -22,6 +22,8 @@ const char* module_kind_to_string(ModuleKind kind) {
     case MODULE_DYN: return "dyn";
     case MODULE_TST: return "tst";
     case MODULE_API: return "api";
+    case MODULE_RES: return "res";
+    case MODULE_SHD: return "shd";
     }
     return "unknown";
 }
@@ -40,6 +42,8 @@ const char* module_artifact_extension(ModuleKind kind) {
     case MODULE_TST: return "";
 #endif
     case MODULE_API: return NULL;
+    case MODULE_RES: return NULL;
+    case MODULE_SHD: return NULL;
     }
     return NULL;
 }
@@ -47,7 +51,7 @@ const char* module_artifact_extension(ModuleKind kind) {
 int module_artifact_name(const char* crate_name, ModuleKind kind,
                          char* buf, int buf_size) {
     if (!crate_name || !buf || buf_size <= 0) return 1;
-    if (kind == MODULE_API) return 1;
+    if (kind == MODULE_API || kind == MODULE_RES || kind == MODULE_SHD) return 1;
 
     int written = 0;
 
@@ -80,6 +84,8 @@ int module_artifact_name(const char* crate_name, ModuleKind kind,
         break;
 #endif
     case MODULE_API:
+    case MODULE_RES:
+    case MODULE_SHD:
         return 1;
     }
 
@@ -94,7 +100,7 @@ int module_compute_artifact_path(const char* ws_root, const char* crate_name,
     if (!ws_root || !crate_name || !profile) return 1;
     if (!out_artifact_path || artifact_path_size <= 0) return 1;
     if (!out_obj_dir || obj_dir_size <= 0) return 1;
-    if (kind == MODULE_API) return 1; // API modules produce no artifact
+    if (kind == MODULE_API || kind == MODULE_RES || kind == MODULE_SHD) return 1; // These modules produce no linked artifact
 
     // Compute: build/<profile>/<crate_name>/
     char tmp1[260];

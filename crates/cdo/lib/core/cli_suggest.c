@@ -14,7 +14,6 @@ static const CommandEntry command_table[] = {
     { "clean",   CDO_CMD_CLEAN   },
     { "new",     CDO_CMD_NEW     },
     { "init",    CDO_CMD_INIT    },
-    { "shader",  CDO_CMD_SHADER  },
     { "tool",    CDO_CMD_TOOL    },
     { "doctor",  CDO_CMD_DOCTOR  },
     { "deps",    CDO_CMD_DEPS    },

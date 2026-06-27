@@ -166,7 +166,7 @@ static int try_vendored_tools(CompilerInfo* info) {
     };
 
     for (int i = 0; gcc_probes[i] != NULL; i++) {
-        if (pal_path_exists(gcc_probes[i]) == 1) {
+        if (pal_path_exists(gcc_probes[i]) == 0) {
             // Found a vendored GCC — try to run it
             if (try_compiler(gcc_probes[i], "--version", info->path, sizeof(info->path),
                              info->version, sizeof(info->version)) == 0) {
@@ -186,7 +186,7 @@ static int try_vendored_tools(CompilerInfo* info) {
     };
 
     for (int i = 0; clang_probes[i] != NULL; i++) {
-        if (pal_path_exists(clang_probes[i]) == 1) {
+        if (pal_path_exists(clang_probes[i]) == 0) {
             if (try_compiler(clang_probes[i], "--version", info->path, sizeof(info->path),
                              info->version, sizeof(info->version)) == 0) {
                 info->family = COMPILER_CLANG;

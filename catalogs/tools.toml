@@ -6,3 +6,12 @@ description = "Portable C/C++ development kit for Windows"
 [tool.platforms.windows-x86_64]
 url = "https://github.com/skeeto/w64devkit/releases/download/v2.0.0/w64devkit-2.0.0.zip"
 checksum = "sha256:71ba0de8fb3da37bcdcc18a80db20e61ee9685fef0a45a74f87ff94c3a34a1df"
+
+[[tool]]
+name = "dxc"
+version = "1.8.2505"
+description = "DirectX Shader Compiler - compiles HLSL to DXIL bytecode"
+
+[tool.platforms.windows-x86_64]
+url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505/dxc_2025_05_24.zip"
+checksum = "sha256:81380f3eca156d902d6404fd6df9f4b0886f576ff3e18b2cc10d3075ffc9d119"

@@ -236,7 +236,7 @@ int deploy_catalog_files(const char* ws_root, const char* build_dir) {
     }
 
     /* Check if workspace has a catalogs/ directory */
-    if (pal_path_exists(src_dir) != 1) {
+    if (pal_path_exists(src_dir) != 0) {
         return 0; /* No catalogs to deploy — not an error */
     }
 
@@ -258,7 +258,7 @@ int deploy_catalog_files(const char* ws_root, const char* build_dir) {
             continue;
         }
 
-        if (pal_path_exists(src_path) != 1) {
+        if (pal_path_exists(src_path) != 0) {
             continue; /* File doesn't exist — skip */
         }
 

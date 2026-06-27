@@ -9,7 +9,7 @@
 /// Prints "Nothing to clean" if the path does not exist.
 static int clean_path(const char* path) {
     int exists = pal_path_exists(path);
-    if (exists != 1) {
+    if (exists != 0) {
         cdo_info("Nothing to clean");
         return 0;
     }

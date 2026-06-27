@@ -17,7 +17,7 @@ typedef enum {
     CDO_CMD_CLEAN,
     CDO_CMD_NEW,
     CDO_CMD_INIT,
-    CDO_CMD_SHADER,
+    CDO_CMD_SHADER, // DEPRECATED: kept for backward compat; use shd/ module instead
     CDO_CMD_TOOL,
     CDO_CMD_DOCTOR,
     CDO_CMD_CATALOG,

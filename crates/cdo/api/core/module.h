@@ -15,9 +15,11 @@ typedef enum {
     MODULE_DYN,     // dyn/ -> shared library (.dll / .so)
     MODULE_TST,     // tst/ -> test executable
     MODULE_API,     // api/ -> header-only (no compilation)
+    MODULE_RES,     // res/ -> resource files (copy only)
+    MODULE_SHD,     // shd/ -> shader sources (compiled to .dxil)
 } ModuleKind;
 
-#define MODULE_KIND_COUNT 5
+#define MODULE_KIND_COUNT 7
 
 // --- Module ---
 typedef struct {

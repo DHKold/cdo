@@ -119,7 +119,7 @@ static void glob_walk_callback(const char* entry_path, bool is_dir, void* ctx) {
         if (check_len + ext_len >= sizeof(check_path)) continue;
         memcpy(check_path + check_len, exts[i], ext_len + 1);
 
-        if (pal_path_exists(check_path)) {
+        if (pal_path_exists(check_path) == 0) {
             pathlist_push(gctx->results, entry_path);
             return; // Found a manifest, no need to check more extensions
         }
@@ -172,7 +172,7 @@ static int expand_member_pattern(const char* root_path, const char* pattern,
             if (check_len + ext_len >= sizeof(check_path)) continue;
             memcpy(check_path + check_len, exts[i], ext_len + 1);
 
-            if (pal_path_exists(check_path)) {
+            if (pal_path_exists(check_path) == 0) {
                 pathlist_push(results, full_path);
                 break;
             }

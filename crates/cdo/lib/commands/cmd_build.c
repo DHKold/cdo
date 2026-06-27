@@ -67,7 +67,25 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
         }
     }
 
-    // Req 8.1: After lib/ succeeds, build exe/, dyn/, tst/ (sequential for now)
+    // Req 8.1: After lib/ succeeds, build shd/, res/, exe/, dyn/, tst/ (sequential)
+
+    // Build Shader_Module if present (Req 4.3) — after lib/, before res/
+    if (crate->has_shd) {
+        rc = build_shader_module(ws, crate, profile, build_prof, false, progress, completed_units);
+        if (rc != 0) {
+            cdo_error("Shader module build failed for crate '%s'", crate->name);
+            return rc;
+        }
+    }
+
+    // Build Resource_Module if present (Req 1.4) — after shd/, before exe/
+    if (crate->has_res) {
+        rc = build_resource_module(ws, crate, profile, progress, completed_units);
+        if (rc != 0) {
+            cdo_error("Resource module build failed for crate '%s'", crate->name);
+            return rc;
+        }
+    }
 
     // Build Executable_Module if present (Req 3.1, 3.2, 3.3, 3.4)
     if (crate->modules[MODULE_EXE].present) {
@@ -101,6 +119,15 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
                                progress, completed_units);
         if (rc != 0) {
             cdo_error("Test module build failed for crate '%s'", crate->name);
+            return rc;
+        }
+    }
+
+    // Propagate dependency module outputs (res, shd, dyn) into this crate's build dir (Req 2.1, 2.2)
+    if (crate->dep_count > 0) {
+        rc = propagate_dep_modules(ws, crate, profile);
+        if (rc != 0) {
+            cdo_error("Dependency module propagation failed for crate '%s'", crate->name);
             return rc;
         }
     }
@@ -278,31 +305,59 @@ int cmd_build(const CdoOptions* opts) {
     static const char* coverage_flags[] = {"-fprofile-arcs", "-ftest-coverage"};
     int coverage_flag_count = opts->coverage ? 2 : 0;
 
-    // --- Step 5: Count total compilation units for progress ---
+    // --- Step 5: Count total compilation units for progress (Req 7.1–7.7) ---
+    // Count compilable files (.c, .cpp, .cxx, .cc) across compiled modules
+    // (lib, exe, dyn, tst) only. Exclude res/ and shd/ files.
+    // build_order already contains only targeted crates + transitive deps
+    // when specific crate names are provided (handled by workspace_resolve).
     int total_units = 0;
+    static const ModuleKind compiled_kinds[] = {MODULE_LIB, MODULE_EXE, MODULE_DYN, MODULE_TST};
+    static const int compiled_kind_count = 4;
+
     for (int i = 0; i < ws.build_order_count; i++) {
         int idx = ws.build_order[i];
         Crate* crate = &ws.crates[idx];
 
-        char crate_full_path[260];
-        pal_path_join(crate_full_path, sizeof(crate_full_path),
-                      ws.root_path, crate->path);
+        if (crate->module_count > 0) {
+            // Module-based crate: count per compiled module
+            for (int k = 0; k < compiled_kind_count; k++) {
+                ModuleKind kind = compiled_kinds[k];
+                Module* mod = &crate->modules[kind];
+                if (!mod->present) continue;
 
-        FileList sources = {0};
-        if (scanner_scan_sources(crate_full_path, NULL, 0, &sources) == 0) {
-            // Count only compilable sources (.c, .cpp, etc.) not headers
-            for (int s = 0; s < sources.count; s++) {
-                const char* ext = pal_path_ext(sources.paths[s]);
-                if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
-                           strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
-                    total_units++;
+                FileList sources = {0};
+                if (scanner_scan_module_sources(mod->dir_path, kind, NULL, 0, &sources) == 0) {
+                    for (int s = 0; s < sources.count; s++) {
+                        const char* ext = pal_path_ext(sources.paths[s]);
+                        if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                                   strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+                            total_units++;
+                        }
+                    }
+                    filelist_free(&sources);
                 }
             }
-            filelist_free(&sources);
+        } else {
+            // Legacy crate: count from src/ directory
+            char crate_full_path[260];
+            pal_path_join(crate_full_path, sizeof(crate_full_path), ws.root_path, crate->path);
+
+            FileList sources = {0};
+            if (scanner_scan_sources(crate_full_path, NULL, 0, &sources) == 0) {
+                for (int s = 0; s < sources.count; s++) {
+                    const char* ext = pal_path_ext(sources.paths[s]);
+                    if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 ||
+                               strcmp(ext, ".cxx") == 0 || strcmp(ext, ".cc") == 0)) {
+                        total_units++;
+                    }
+                }
+                filelist_free(&sources);
+            }
         }
     }
 
-    ProgressBar* progress = progress_create("Building", total_units);
+    // Req 7.7: If total compilable count is zero, skip progress bar entirely
+    ProgressBar* progress = (total_units > 0) ? progress_create("Building", total_units) : NULL;
     int completed_units = 0;
     int failed = 0;
 
@@ -424,6 +479,11 @@ int cmd_build(const CdoOptions* opts) {
                                      coverage_flags, coverage_flag_count,
                                      progress, &completed_units);
             if (rc != 0) {
+                // Req 7.8: Finalize progress bar at current count before reporting error
+                if (progress) {
+                    progress_finish(progress);
+                    progress = NULL;
+                }
                 failed = 1;
                 break;
             }
@@ -455,6 +515,11 @@ int cmd_build(const CdoOptions* opts) {
 
             int legacy_rc = build_legacy_crate(&legacy_ctx);
             if (legacy_rc == 1) {
+                // Req 7.8: Finalize progress bar at current count before reporting error
+                if (progress) {
+                    progress_finish(progress);
+                    progress = NULL;
+                }
                 failed = 1;
                 break;
             }

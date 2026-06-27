@@ -314,7 +314,7 @@ static int tool_install(const ToolArgs* args) {
 
     // Step 2: Check cache — skip download if archive exists and --refresh not set
     bool need_download = true;
-    if (!args->refresh && pal_path_exists(cache_path) == 1) {
+    if (!args->refresh && pal_path_exists(cache_path) == 0) {
         cdo_info("Using cached archive: %s", filename);
         need_download = false;
     }
@@ -406,7 +406,7 @@ static int tool_install(const ToolArgs* args) {
 
 static int tool_list(void) {
     // Walk .cdo/tools/ and list directories that contain a manifest
-    if (pal_path_exists(TOOLS_DIR) != 1) {
+    if (pal_path_exists(TOOLS_DIR) != 0) {
         cdo_info("No tools installed");
         return 0;
     }
@@ -435,7 +435,7 @@ static int tool_remove(const ToolArgs* args) {
         return 1;
     }
 
-    if (pal_path_exists(tool_dir) != 1) {
+    if (pal_path_exists(tool_dir) != 0) {
         cdo_error("Tool '%s' is not installed", args->tool_name);
         return 1;
     }

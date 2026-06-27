@@ -348,7 +348,7 @@ int cmd_test(const CdoOptions* opts) {
                 pal_path_join(tmp2, sizeof(tmp2), tmp1, test_crates[i]->name);
                 pal_path_join(crate_build_dir, sizeof(crate_build_dir), ws.root_path, tmp2);
 
-                int result = coverage_run_gcov(crate_build_dir,
+                int result = coverage_run_gcov_filtered(crate_build_dir, ws.root_path,
                                               cov_files + cov_count,
                                               COVERAGE_MAX_FILES - cov_count);
                 if (result == -2) {

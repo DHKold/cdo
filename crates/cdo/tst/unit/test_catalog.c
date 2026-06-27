@@ -58,6 +58,79 @@ TEST(catalog_resolve_tool_not_found) {
     return 0;
 }
 
+// --- DXC catalog resolution (Requirements 1.4, 1.6) ---
+
+TEST(catalog_resolve_dxc_windows_x86_64) {
+    // Requirement 1.4: resolving "dxc" for windows-x86_64 returns correct URL and checksum
+    Catalog cat = {0};
+    int rc = catalog_load(&cat, ".");
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Construct the windows-x86_64 platform explicitly
+    CatalogPlatform platform = {0};
+    strcpy(platform.os, "windows");
+    strcpy(platform.arch, "x86_64");
+    strcpy(platform.triple, "windows-x86_64");
+
+    CatalogResolveResult result = {0};
+    rc = catalog_resolve_tool(&cat, "dxc", NULL, &platform, &result);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Verify the URL matches the catalog entry
+    TEST_ASSERT_STR_EQ(result.url,
+        "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505/dxc_2025_05_24.zip");
+
+    // Verify the checksum matches the catalog entry
+    TEST_ASSERT_STR_EQ(result.checksum,
+        "sha256:81380f3eca156d902d6404fd6df9f4b0886f576ff3e18b2cc10d3075ffc9d119");
+
+    // Verify the version is populated
+    TEST_ASSERT_STR_EQ(result.version, "1.8.2505");
+
+    catalog_resolve_result_free(&result);
+    catalog_free(&cat);
+    return 0;
+}
+
+TEST(catalog_resolve_dxc_not_in_catalog) {
+    // Requirement 1.6: resolving a tool name not in the catalog returns non-zero
+    Catalog cat = {0};
+    int rc = catalog_load(&cat, ".");
+    TEST_ASSERT_EQ(rc, 0);
+
+    CatalogPlatform platform = {0};
+    strcpy(platform.os, "windows");
+    strcpy(platform.arch, "x86_64");
+    strcpy(platform.triple, "windows-x86_64");
+
+    CatalogResolveResult result = {0};
+    rc = catalog_resolve_tool(&cat, "totally_fake_tool_12345", NULL, &platform, &result);
+    TEST_ASSERT(rc != 0);
+
+    catalog_free(&cat);
+    return 0;
+}
+
+TEST(catalog_resolve_dxc_unsupported_platform) {
+    // Requirement 1.6: resolving a tool for an unsupported platform returns non-zero
+    Catalog cat = {0};
+    int rc = catalog_load(&cat, ".");
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Construct a platform that DXC does NOT have an entry for
+    CatalogPlatform platform = {0};
+    strcpy(platform.os, "linux");
+    strcpy(platform.arch, "arm64");
+    strcpy(platform.triple, "linux-arm64");
+
+    CatalogResolveResult result = {0};
+    rc = catalog_resolve_tool(&cat, "dxc", NULL, &platform, &result);
+    TEST_ASSERT(rc != 0);
+
+    catalog_free(&cat);
+    return 0;
+}
+
 // --- catalog_search ---
 
 TEST(catalog_search_match) {

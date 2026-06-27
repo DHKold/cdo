@@ -5,4 +5,5 @@ build/
 .cdo/
 
 # temporary and demo
-demos/
+e2e/
+*.gcov

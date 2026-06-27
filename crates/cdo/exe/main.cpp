@@ -18,7 +18,6 @@ extern "C" {
 #include "commands/cmd_deps.h"
 #include "commands/cmd_tool.h"
 #include "commands/cmd_doctor.h"
-#include "commands/cmd_shader.h"
 #include "commands/cmd_catalog.h"
 }
 
@@ -125,7 +124,8 @@ int main(int argc, char* argv[]) {
         case CDO_CMD_DOCTOR:
             return cmd_doctor(&opts);
         case CDO_CMD_SHADER:
-            return cmd_shader(&opts);
+            cdo_error("The 'shader' command has been removed. Use a shd/ module in your crate instead.");
+            return 1;
         case CDO_CMD_CATALOG:
             return cmd_catalog(&opts);
         case CDO_CMD_DEPS:

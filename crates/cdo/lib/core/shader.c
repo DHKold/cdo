@@ -19,6 +19,17 @@ typedef struct {
     int         errors;
 } ShaderWalkCtx;
 
+/// Extended context for shader_compile_ex walk callback.
+typedef struct {
+    const char* output_dir;
+    const char* dxc_path;
+    const char* target_profile;
+    bool        force;
+    int         compiled;
+    int         skipped;
+    int         errors;
+} ShaderWalkExCtx;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -138,6 +149,52 @@ static int invoke_dxc(const char* dxc_path, const char* source_path,
     return 0;
 }
 
+/// Invoke DXC to compile a single shader file with a configurable target profile.
+/// Returns 0 on success, non-zero on failure.
+static int invoke_dxc_with_profile(const char* dxc_path, const char* source_path,
+                                   const char* output_path, const char* target_profile) {
+    const char* args[] = {
+        "-T", target_profile,
+        "-Fo", output_path,
+        source_path
+    };
+
+    PalSpawnOpts spawn_opts;
+    memset(&spawn_opts, 0, sizeof(spawn_opts));
+    spawn_opts.program = dxc_path;
+    spawn_opts.args = args;
+    spawn_opts.arg_count = 5;
+    spawn_opts.capture_output = true;
+
+    PalSpawnResult result;
+    memset(&result, 0, sizeof(result));
+
+    cdo_debug("DXC [%s]: %s -> %s", target_profile, source_path, output_path);
+
+    int rc = pal_spawn(&spawn_opts, &result);
+    if (rc != PAL_OK) {
+        cdo_error("Failed to spawn DXC for: %s", source_path);
+        pal_spawn_result_free(&result);
+        return -1;
+    }
+
+    if (result.exit_code != 0) {
+        if (result.stderr_buf && result.stderr_buf[0] != '\0') {
+            cdo_error("DXC error: %s", result.stderr_buf);
+        }
+        if (result.stdout_buf && result.stdout_buf[0] != '\0') {
+            cdo_error("DXC output: %s", result.stdout_buf);
+        }
+        cdo_error("Shader compilation failed: %s (exit code %d)",
+                  source_path, result.exit_code);
+        pal_spawn_result_free(&result);
+        return -1;
+    }
+
+    pal_spawn_result_free(&result);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // pal_dir_walk callback
 // ---------------------------------------------------------------------------
@@ -243,6 +300,126 @@ int shader_compile(const char* shader_dir, const char* output_dir,
     if (ctx.errors > 0) {
         cdo_error("%d shader(s) failed to compile", ctx.errors);
         return ctx.errors;
+    }
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Extended API: shader_compile_ex
+// ---------------------------------------------------------------------------
+
+/// Walk callback for shader_compile_ex: processes each .hlsl file with
+/// configurable target profile and force flag.
+static void shader_walk_ex_callback(const char* path, bool is_dir, void* ctx) {
+    if (is_dir) return;
+
+    ShaderWalkExCtx* wctx = (ShaderWalkExCtx*)ctx;
+
+    // Check if the file has .hlsl extension
+    const char* ext = pal_path_ext(path);
+    if (!ext || strcmp(ext, ".hlsl") != 0) {
+        return;
+    }
+
+    // Build output path: output_dir / basename.dxil
+    char basename[256];
+    if (get_basename_no_ext(path, basename, sizeof(basename)) != 0) {
+        cdo_error("Shader filename too long: %s", path);
+        wctx->errors++;
+        return;
+    }
+
+    char output_name[260];
+    snprintf(output_name, sizeof(output_name), "%s.dxil", basename);
+
+    char output_path[520];
+    if (pal_path_join(output_path, sizeof(output_path),
+                      wctx->output_dir, output_name) != 0) {
+        cdo_error("Output path too long for shader: %s", path);
+        wctx->errors++;
+        return;
+    }
+
+    // Check if recompilation is needed (unless force is set)
+    if (!wctx->force && !shader_needs_compile(path, output_path)) {
+        wctx->skipped++;
+        return;
+    }
+
+    // Invoke DXC with the configured target profile
+    if (invoke_dxc_with_profile(wctx->dxc_path, path, output_path,
+                                wctx->target_profile) != 0) {
+        wctx->errors++;
+        return;
+    }
+
+    wctx->compiled++;
+}
+
+int shader_compile_ex(const ShaderCompileOpts* opts, ShaderCompileResult* result) {
+    // Initialize result if provided
+    ShaderCompileResult local_result = {0};
+
+    if (!opts || !opts->shader_dir || !opts->output_dir || !opts->dxc_path) {
+        cdo_error("shader_compile_ex: NULL argument");
+        return -1;
+    }
+
+    // Use default target profile if not specified
+    const char* target_profile = opts->target_profile;
+    if (!target_profile || target_profile[0] == '\0') {
+        target_profile = "lib_6_3";
+    }
+
+    // Verify DXC binary exists
+    if (pal_path_exists(opts->dxc_path) != 0) {
+        cdo_error("DXC shader compiler not found at: %s", opts->dxc_path);
+        cdo_info("Try: cdo tool install dxc");
+        return -1;
+    }
+
+    // Verify shader directory exists
+    if (pal_path_exists(opts->shader_dir) != 0) {
+        cdo_error("Shader source directory does not exist: %s", opts->shader_dir);
+        return -1;
+    }
+
+    // Ensure output directory exists
+    if (pal_path_exists(opts->output_dir) != 0) {
+        int rc = pal_mkdir_p(opts->output_dir);
+        if (rc != 0) {
+            cdo_error("Failed to create output directory: %s", opts->output_dir);
+            return -1;
+        }
+    }
+
+    // Walk the shader directory and process each .hlsl file
+    ShaderWalkExCtx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.output_dir     = opts->output_dir;
+    ctx.dxc_path       = opts->dxc_path;
+    ctx.target_profile = target_profile;
+    ctx.force          = opts->force;
+
+    int rc = pal_dir_walk(opts->shader_dir, shader_walk_ex_callback, &ctx);
+    if (rc != PAL_OK) {
+        cdo_error("Failed to walk shader directory: %s", opts->shader_dir);
+        return -1;
+    }
+
+    // Populate result
+    local_result.compiled_count = ctx.compiled;
+    local_result.skipped_count  = ctx.skipped;
+    local_result.error_count    = ctx.errors;
+
+    if (result) {
+        *result = local_result;
+    }
+
+    // Return non-zero if any shaders failed
+    if (ctx.errors > 0) {
+        return -1;
     }
 
     return 0;

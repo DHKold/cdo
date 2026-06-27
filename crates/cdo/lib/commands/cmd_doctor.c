@@ -65,7 +65,7 @@ static CheckResult check_workspace_manifest(const char* root_path) {
         return CHECK_FAIL;
     }
 
-    if (pal_path_exists(manifest_path) != 1) {
+    if (pal_path_exists(manifest_path) != 0) {
         doctor_print(CHECK_FAIL, "Workspace manifest (cdo.toml) not found");
         return CHECK_FAIL;
     }
@@ -108,7 +108,7 @@ static CheckResult check_crate_manifests(const Workspace* ws) {
             continue;
         }
 
-        if (pal_path_exists(full_path) != 1) {
+        if (pal_path_exists(full_path) != 0) {
             char msg[320];
             snprintf(msg, sizeof(msg), "Crate manifest missing: %s/crate.toml", ws->crates[i].name);
             doctor_print(CHECK_FAIL, msg);
@@ -156,7 +156,7 @@ static CheckResult check_dependencies(const char* root_path, bool fix) {
         return CHECK_FAIL;
     }
 
-    if (pal_path_exists(lock_path) != 1) {
+    if (pal_path_exists(lock_path) != 0) {
         if (fix) {
             // Attempt to regenerate the lock file with no deps
             int rc = dep_lock_write(lock_path, NULL, 0);
@@ -202,7 +202,7 @@ static CheckResult check_tools(const char* root_path) {
         return CHECK_FAIL;
     }
 
-    if (pal_path_exists(tools_dir) != 1) {
+    if (pal_path_exists(tools_dir) != 0) {
         doctor_print(CHECK_WARN, "Tools directory (.cdo/tools) not found");
         return CHECK_WARN;
     }
