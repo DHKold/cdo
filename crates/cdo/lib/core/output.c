@@ -25,7 +25,6 @@ static void progress_erase(void);
 static void progress_rerender(void);
 
 // --- Test instrumentation ---
-#ifdef CDO_TESTING
 static int s_output_emit_count = 0;
 
 int output_test_get_emit_count(void) {
@@ -35,7 +34,6 @@ int output_test_get_emit_count(void) {
 void output_test_reset_emit_count(void) {
     s_output_emit_count = 0;
 }
-#endif
 
 // --- ANSI escape sequences ---
 #define ANSI_RED     "\033[31m"
@@ -135,9 +133,7 @@ void output_log(CdoLogLevel level, const char* fmt, ...) {
         return;
     }
 
-#ifdef CDO_TESTING
     s_output_emit_count++;
-#endif
 
     // Choose output stream: ERROR and WARN go to stderr, others to stdout
     FILE* stream = (level <= CDO_LOG_WARN) ? stderr : stdout;

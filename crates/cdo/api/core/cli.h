@@ -39,9 +39,11 @@ typedef struct {
     bool            release;
     bool            dev;                // --dev flag (deps add/remove scope)
     bool            coverage;           // --coverage flag
+    bool            list;               // --list flag (test: list test names)
     bool            filter_tools;       // --tools flag (catalog list filter)
     bool            filter_packages;    // --packages flag (catalog list filter)
     const char*     profile;
+    const char*     filter;             // --filter <pattern> (test: filter pattern)
     const char*     version_constraint; // --version <constraint>
     int             jobs;           // 0 = auto-detect
     int             argc_rest;      // args after --

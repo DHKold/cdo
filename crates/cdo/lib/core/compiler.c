@@ -1449,10 +1449,9 @@ int compiler_link(const LinkJob* job, const CompilerInfo* info) {
 }
 
 // ---------------------------------------------------------------------------
-// Test wrappers (CDO_TESTING only)
+// Test wrappers — expose internal arg builders for property-based testing
 // ---------------------------------------------------------------------------
 
-#ifdef CDO_TESTING
 int compiler_test_build_gcc_args(const CompileJob* job, const CompilerInfo* info,
                                  const char** args, int max_args) {
     return build_gcc_clang_args(job, info, args, max_args);
@@ -1461,4 +1460,3 @@ int compiler_test_build_gcc_args(const CompileJob* job, const CompilerInfo* info
 int compiler_test_build_msvc_args(const CompileJob* job, const char** args, int max_args) {
     return build_msvc_args(job, args, max_args);
 }
-#endif

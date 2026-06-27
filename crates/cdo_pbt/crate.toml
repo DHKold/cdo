@@ -1,9 +1,0 @@
-[crate]
-name = "cdo_pbt"
-c-standard = 17
-
-[dependencies]
-cdo = {}
-
-[build]
-defines = ["CDO_TESTING"]

@@ -194,6 +194,22 @@ int cdo_cli_parse(int argc, char** argv, CdoOptions* opts) {
                 opts->coverage = true;
                 continue;
             }
+            // --list
+            if (strcmp(arg, "--list") == 0) {
+                opts->list = true;
+                continue;
+            }
+            // --filter=PATTERN or --filter PATTERN
+            if (strncmp(arg, "--filter=", 9) == 0) {
+                opts->filter = arg + 9;
+                continue;
+            }
+            if (strcmp(arg, "--filter") == 0) {
+                if (i + 1 < argc) {
+                    opts->filter = argv[++i];
+                }
+                continue;
+            }
             // --dev
             if (strcmp(arg, "--dev") == 0) {
                 opts->dev = true;
@@ -349,13 +365,20 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "  [CRATE...]  Test crates to run (default: all)\n"
             "\n"
             "Options:\n"
+            "      --filter PATTERN   Run only tests matching PATTERN (substring or glob)\n"
+            "      --list             List available tests without running them\n"
+            "      --coverage         Build with coverage instrumentation and report\n"
+            "  -j, --jobs N           Number of parallel test jobs\n"
             "  -v, --verbose          Enable verbose output\n"
-            "  -j, --jobs N           Number of parallel jobs\n"
             "  -h, --help             Print help information\n"
             "\n"
             "Examples:\n"
             "  cdo test               Run all tests\n"
             "  cdo test my-tests      Run a specific test crate\n"
+            "  cdo test --filter parse  Run tests with 'parse' in the name\n"
+            "  cdo test --list          List all test names\n"
+            "  cdo test --coverage      Run with coverage reporting\n"
+            "  cdo test --jobs 4        Run tests with 4 parallel jobs\n"
         );
         break;
 

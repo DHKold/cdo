@@ -5,3 +5,6 @@ cpp-standard = 20
 
 [build]
 link-libs = ["winhttp"]
+
+[dependencies]
+cdo_ut = {}
