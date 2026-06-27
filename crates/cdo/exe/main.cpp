@@ -156,10 +156,6 @@ int main(int argc, char* argv[]) {
             }
             return 1;
         }
-        case CDO_CMD_SOURCE:
-        case CDO_CMD_SELF:
-            std::fprintf(stderr, "error: command not yet implemented\n");
-            return 1;
         default:
             print_usage(stdout);
             return 0;

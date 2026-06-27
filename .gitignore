@@ -3,3 +3,6 @@ build/
 
 # cdo local data (vendored tools, download cache)
 .cdo/
+
+# temporary and demo
+demos/

@@ -14,11 +14,9 @@ static const CommandEntry command_table[] = {
     { "clean",   CDO_CMD_CLEAN   },
     { "new",     CDO_CMD_NEW     },
     { "init",    CDO_CMD_INIT    },
-    { "source",  CDO_CMD_SOURCE  },
     { "shader",  CDO_CMD_SHADER  },
     { "tool",    CDO_CMD_TOOL    },
     { "doctor",  CDO_CMD_DOCTOR  },
-    { "self",    CDO_CMD_SELF    },
     { "deps",    CDO_CMD_DEPS    },
     { "catalog", CDO_CMD_CATALOG },
     { "help",    CDO_CMD_HELP    },
@@ -261,15 +259,11 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "  clean     Remove build artifacts\n"
             "  new       Create a new project from template\n"
             "  init      Initialize a project in current directory\n"
-            "  add       Add a dependency\n"
-            "  remove    Remove a dependency\n"
             "  deps      Manage dependencies (add, remove, list)\n"
             "  catalog   Browse and search the package/tool catalog\n"
-            "  source    Manage source files\n"
             "  shader    Compile shaders\n"
             "  tool      Manage vendored tools\n"
-            "  doctor    Diagnose environment issues\n"
-            "  self      Update CDo\n\n"
+            "  doctor    Diagnose environment issues\n\n"
             "Options:\n"
             "  -h, --help             Print help information\n"
             "  -v, --verbose          Enable verbose output\n"
@@ -374,27 +368,15 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "Initialize a project in current directory\n\n"
             "Usage: cdo init [OPTIONS] [TEMPLATE]\n\n"
             "Arguments:\n"
-            "  [TEMPLATE]  Template to use (default: executable)\n\n"
+            "  [TEMPLATE]  Template to use (optional)\n\n"
             "Options:\n"
+            "      --venv             Create a virtual environment (.cdo/ with local binary)\n"
             "      --force            Overwrite existing files\n"
             "  -h, --help             Print help information\n\n"
             "Examples:\n"
-            "  cdo init               Initialize with default template\n"
-            "  cdo init lib           Initialize as a library\n"
-        );
-        break;
-    case CDO_CMD_SOURCE:
-        fprintf(out,
-            "Manage source files\n\n"
-            "Usage: cdo source <SUBCOMMAND>\n\n"
-            "Subcommands:\n"
-            "  list       List detected source files\n"
-            "  add        Add a source file\n"
-            "  exclude    Add an exclude pattern\n\n"
-            "Options:\n"
-            "  -h, --help             Print help information\n\n"
-            "Examples:\n"
-            "  cdo source list        Show all detected sources\n"
+            "  cdo init hello         Initialize from 'hello' template\n"
+            "  cdo init --venv        Create virtual environment only\n"
+            "  cdo init hello --venv  Template + virtual environment\n"
         );
         break;
     case CDO_CMD_SHADER:
@@ -444,20 +426,6 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "Examples:\n"
             "  cdo doctor             Run all diagnostics\n"
             "  cdo doctor --fix       Fix detected issues\n"
-        );
-        break;
-    case CDO_CMD_SELF:
-        fprintf(out,
-            "Update CDo\n\n"
-            "Usage: cdo self <SUBCOMMAND>\n\n"
-            "Subcommands:\n"
-            "  update     Update CDo to the latest version\n"
-            "  version    Print the current version\n\n"
-            "Options:\n"
-            "  -h, --help             Print help information\n\n"
-            "Examples:\n"
-            "  cdo self update        Update to latest version\n"
-            "  cdo self version       Show current version\n"
         );
         break;
     case CDO_CMD_CATALOG:

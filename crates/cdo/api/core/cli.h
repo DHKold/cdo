@@ -17,11 +17,9 @@ typedef enum {
     CDO_CMD_CLEAN,
     CDO_CMD_NEW,
     CDO_CMD_INIT,
-    CDO_CMD_SOURCE,
     CDO_CMD_SHADER,
     CDO_CMD_TOOL,
     CDO_CMD_DOCTOR,
-    CDO_CMD_SELF,
     CDO_CMD_CATALOG,
     CDO_CMD_DEPS,
     CDO_CMD_HELP,
@@ -37,7 +35,7 @@ typedef struct {
     bool            quiet;
     bool            help;
     bool            release;
-    bool            dev;                // --dev flag (deps add/remove scope)
+    bool            dev;                // --dev flag (deps scope)
     bool            coverage;           // --coverage flag
     bool            list;               // --list flag (test: list test names)
     bool            filter_tools;       // --tools flag (catalog list filter)

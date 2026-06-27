@@ -14,17 +14,17 @@
 
 static const char *KNOWN_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
-    "source", "shader", "tool", "doctor",
-    "self", "deps", "catalog", "help",
+    "shader", "tool", "doctor",
+    "deps", "catalog", "help",
 };
-#define KNOWN_COMMAND_COUNT 14
+#define KNOWN_COMMAND_COUNT 12
 
 static const char *SUGGESTABLE_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
-    "source", "shader", "tool", "doctor",
-    "self", "deps", "catalog",
+    "shader", "tool", "doctor",
+    "deps", "catalog",
 };
-#define SUGGESTABLE_COMMAND_COUNT 13
+#define SUGGESTABLE_COMMAND_COUNT 11
 
 static int cli_suggest_threshold(const char *input) {
     int input_len = (int)strlen(input);
@@ -255,11 +255,9 @@ static const struct { const char* name; CdoCommand cmd; } GEN_COMMANDS[] = {
     { "clean",   CDO_CMD_CLEAN   },
     { "new",     CDO_CMD_NEW     },
     { "init",    CDO_CMD_INIT    },
-    { "source",  CDO_CMD_SOURCE  },
     { "shader",  CDO_CMD_SHADER  },
     { "tool",    CDO_CMD_TOOL    },
     { "doctor",  CDO_CMD_DOCTOR  },
-    { "self",    CDO_CMD_SELF    },
 };
 #define GEN_COMMAND_COUNT (int)(sizeof(GEN_COMMANDS) / sizeof(GEN_COMMANDS[0]))
 
