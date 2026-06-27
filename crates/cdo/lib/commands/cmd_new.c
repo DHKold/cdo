@@ -1,7 +1,7 @@
 #include "commands/cmd_new.h"
 #include "core/output.h"
 #include "core/template.h"
-#include "core/http.h"
+#include "commons/http.h"
 #include "pal/pal.h"
 
 #include <stdio.h>

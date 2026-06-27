@@ -1,6 +1,6 @@
 // crates/cdo_pbt/src/unit/test_checksum.c
 #include "cdo_ut.h"
-#include "core/checksum.h"
+#include "commons/checksum.h"
 
 /*
  * Known SHA-256 values:

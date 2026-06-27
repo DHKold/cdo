@@ -1,5 +1,5 @@
-#ifndef CDO_CORE_ARCHIVE_H
-#define CDO_CORE_ARCHIVE_H
+#ifndef CDO_COMMONS_ARCHIVE_H
+#define CDO_COMMONS_ARCHIVE_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,7 +13,7 @@ extern "C" {
 int archive_extract_zip(const char* archive_path, const char* dest_dir);
 
 /**
- * Extract a tar.gz archive to dest_dir. (Stub - task 14.2)
+ * Extract a tar.gz archive to dest_dir.
  * Returns 0 on success, non-zero on error.
  */
 int archive_extract_targz(const char* archive_path, const char* dest_dir);
@@ -22,4 +22,4 @@ int archive_extract_targz(const char* archive_path, const char* dest_dir);
 }
 #endif
 
-#endif /* CDO_CORE_ARCHIVE_H */
+#endif /* CDO_COMMONS_ARCHIVE_H */

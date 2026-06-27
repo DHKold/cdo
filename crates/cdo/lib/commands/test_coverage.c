@@ -194,8 +194,18 @@ int coverage_run_gcov(const char *build_dir, FileCoverage *out, int max_files) {
     for (int i = 0; i < gcda_files->count && total_files < max_files; i++) {
         PalSpawnOpts spawn_opts = {0};
         spawn_opts.program = "gcov";
+
+        // The walk produces paths relative to build_dir (e.g. "./build/debug/cdo/lib/foo.gcda").
+        // Since we set cwd to build_dir, we must make the path relative to it.
+        const char *gcda_path = gcda_files->paths[i];
+        size_t bd_len = strlen(build_dir);
+        if (strncmp(gcda_path, build_dir, bd_len) == 0 &&
+            (gcda_path[bd_len] == '/' || gcda_path[bd_len] == '\\')) {
+            gcda_path = gcda_path + bd_len + 1;
+        }
+
         const char *args[1];
-        args[0] = gcda_files->paths[i];
+        args[0] = gcda_path;
         spawn_opts.args = args;
         spawn_opts.arg_count = 1;
         spawn_opts.capture_output = true;

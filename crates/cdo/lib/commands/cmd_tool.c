@@ -1,10 +1,10 @@
 #include "commands/cmd_tool.h"
 #include "core/output.h"
-#include "core/http.h"
-#include "core/archive.h"
-#include "core/toml.h"
+#include "commons/http.h"
+#include "commons/archive.h"
+#include "commons/toml.h"
 #include "core/catalog.h"
-#include "core/checksum.h"
+#include "commons/checksum.h"
 #include "pal/pal.h"
 
 #include <string.h>

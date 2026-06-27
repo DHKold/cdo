@@ -1,5 +1,5 @@
-#ifndef CDO_CORE_CHECKSUM_H
-#define CDO_CORE_CHECKSUM_H
+#ifndef CDO_COMMONS_CHECKSUM_H
+#define CDO_COMMONS_CHECKSUM_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -52,4 +52,4 @@ int checksum_verify_file(const char* filepath, const ChecksumSpec* expected);
 }
 #endif
 
-#endif /* CDO_CORE_CHECKSUM_H */
+#endif /* CDO_COMMONS_CHECKSUM_H */

@@ -1,6 +1,6 @@
-#include "core/archive.h"
+#include "commons/archive.h"
 #include "pal/pal.h"
-#include "core/output.h"
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +10,19 @@
 #ifndef _WIN32
 #include <sys/stat.h>
 #endif
+
+/* ============================================================
+ * Internal error helper (replaces core/output.h dependency)
+ * ============================================================ */
+
+static void archive_error(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "error: ");
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+}
 
 #define ZIP_LFH_SIG   0x04034b50u
 #define ZIP_CD_SIG    0x02014b50u
@@ -274,33 +287,33 @@ int archive_extract_zip(const char* archive_path, const char* dest_dir) {
 
     char* raw = NULL; size_t rlen = 0;
     if (pal_file_read(archive_path, &raw, &rlen) != 0) {
-        cdo_error("archive: cannot read '%s'", archive_path);
+        archive_error("archive: cannot read '%s'", archive_path);
         return -1;
     }
     const uint8_t* d = (const uint8_t*)raw;
 
     const uint8_t* eocd = zip_find_eocd(d, rlen);
     if (!eocd) {
-        cdo_error("archive: corrupted ZIP (no EOCD) '%s'", archive_path);
+        archive_error("archive: corrupted ZIP (no EOCD) '%s'", archive_path);
         free(raw); return -1;
     }
 
     uint16_t nent = rd16(eocd + 10);
     uint32_t cdoff = rd32(eocd + 16);
     if ((size_t)cdoff >= rlen) {
-        cdo_error("archive: corrupted ZIP (bad CD offset) '%s'", archive_path);
+        archive_error("archive: corrupted ZIP (bad CD offset) '%s'", archive_path);
         free(raw); return -1;
     }
 
     if (pal_mkdir_p(dest_dir) != 0) {
-        cdo_error("archive: cannot create dest '%s'", dest_dir);
+        archive_error("archive: cannot create dest '%s'", dest_dir);
         free(raw); return -1;
     }
 
     const uint8_t* cd = d + cdoff;
     for (int i = 0; i < (int)nent; i++) {
         if (cd + 46 > d + rlen || rd32(cd) != ZIP_CD_SIG) {
-            cdo_error("archive: bad central directory '%s'", archive_path);
+            archive_error("archive: bad central directory '%s'", archive_path);
             free(raw); return -1;
         }
 
@@ -313,7 +326,7 @@ int archive_extract_zip(const char* archive_path, const char* dest_dir) {
         uint32_t loff    = rd32(cd + 42);
 
         if (cd + 46 + nlen > d + rlen) {
-            cdo_error("archive: truncated entry '%s'", archive_path);
+            archive_error("archive: truncated entry '%s'", archive_path);
             free(raw); return -1;
         }
         const char* name = (const char*)(cd + 46);
@@ -333,45 +346,45 @@ int archive_extract_zip(const char* archive_path, const char* dest_dir) {
         }
 
         if ((size_t)loff + 30 > rlen || rd32(d + loff) != ZIP_LFH_SIG) {
-            cdo_error("archive: bad local header '%s'", archive_path);
+            archive_error("archive: bad local header '%s'", archive_path);
             free(op); free(raw); return -1;
         }
         uint16_t ln = rd16(d + loff + 26);
         uint16_t le = rd16(d + loff + 28);
         size_t foff = (size_t)loff + 30 + ln + le;
         if (foff + csz > rlen) {
-            cdo_error("archive: data overflow '%s'", archive_path);
+            archive_error("archive: data overflow '%s'", archive_path);
             free(op); free(raw); return -1;
         }
         const uint8_t* fd = d + foff;
 
         if (zip_mkparent(op) != 0) {
-            cdo_error("archive: mkdir failed '%s'", op);
+            archive_error("archive: mkdir failed '%s'", op);
             free(op); free(raw); return -1;
         }
 
         if (method == ZIP_STORE) {
             if (pal_file_write(op, (const char*)fd, csz) != 0) {
-                cdo_error("archive: write failed '%s'", op);
+                archive_error("archive: write failed '%s'", op);
                 free(op); free(raw); return -1;
             }
         } else if (method == ZIP_DEFLATE) {
             uint8_t* dec = NULL; size_t dlen2 = 0;
             if (inflate_raw(fd, csz, &dec, &dlen2) != 0) {
-                cdo_error("archive: inflate failed in '%s'", archive_path);
+                archive_error("archive: inflate failed in '%s'", archive_path);
                 free(op); free(raw); return -1;
             }
             if (dlen2 != usz) {
-                cdo_error("archive: size mismatch in '%s'", archive_path);
+                archive_error("archive: size mismatch in '%s'", archive_path);
                 free(dec); free(op); free(raw); return -1;
             }
             if (pal_file_write(op, (const char*)dec, dlen2) != 0) {
-                cdo_error("archive: write failed '%s'", op);
+                archive_error("archive: write failed '%s'", op);
                 free(dec); free(op); free(raw); return -1;
             }
             free(dec);
         } else {
-            cdo_error("archive: unsupported method %d in '%s'", method, archive_path);
+            archive_error("archive: unsupported method %d in '%s'", method, archive_path);
             free(op); free(raw); return -1;
         }
         free(op);
@@ -576,7 +589,7 @@ int archive_extract_targz(const char* archive_path, const char* dest_dir) {
     /* Read the .tar.gz file */
     char* raw = NULL; size_t raw_len = 0;
     if (pal_file_read(archive_path, &raw, &raw_len) != 0) {
-        cdo_error("archive: cannot read '%s'", archive_path);
+        archive_error("archive: cannot read '%s'", archive_path);
         return -1;
     }
 
@@ -585,13 +598,13 @@ int archive_extract_targz(const char* archive_path, const char* dest_dir) {
     int rc = gzip_decompress((const uint8_t*)raw, raw_len, &tar_data, &tar_len);
     free(raw);
     if (rc != 0) {
-        cdo_error("archive: gzip decompress failed '%s'", archive_path);
+        archive_error("archive: gzip decompress failed '%s'", archive_path);
         return -1;
     }
 
     /* Create destination directory */
     if (pal_mkdir_p(dest_dir) != 0) {
-        cdo_error("archive: cannot create dest '%s'", dest_dir);
+        archive_error("archive: cannot create dest '%s'", dest_dir);
         free(tar_data);
         return -1;
     }
@@ -600,7 +613,7 @@ int archive_extract_targz(const char* archive_path, const char* dest_dir) {
     rc = tar_extract(tar_data, tar_len, dest_dir);
     free(tar_data);
     if (rc != 0) {
-        cdo_error("archive: tar extraction failed '%s'", archive_path);
+        archive_error("archive: tar extraction failed '%s'", archive_path);
     }
     return rc;
 }

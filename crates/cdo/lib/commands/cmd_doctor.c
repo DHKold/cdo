@@ -2,7 +2,7 @@
 #include "core/compiler.h"
 #include "core/workspace.h"
 #include "core/deps.h"
-#include "core/toml.h"
+#include "commons/toml.h"
 #include "core/output.h"
 #include "pal/pal.h"
 

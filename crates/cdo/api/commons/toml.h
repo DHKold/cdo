@@ -1,5 +1,5 @@
-#ifndef CDO_CORE_TOML_H
-#define CDO_CORE_TOML_H
+#ifndef CDO_COMMONS_TOML_H
+#define CDO_COMMONS_TOML_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -91,4 +91,4 @@ void toml_value_free(TomlValue* val);
 }
 #endif
 
-#endif // CDO_CORE_TOML_H
+#endif // CDO_COMMONS_TOML_H

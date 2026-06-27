@@ -1,5 +1,5 @@
-#ifndef CDO_CORE_SEMVER_H
-#define CDO_CORE_SEMVER_H
+#ifndef CDO_COMMONS_SEMVER_H
+#define CDO_COMMONS_SEMVER_H
 
 #include <stdbool.h>
 
@@ -60,4 +60,4 @@ int semver_compare(const Semver* a, const Semver* b);
 }
 #endif
 
-#endif /* CDO_CORE_SEMVER_H */
+#endif /* CDO_COMMONS_SEMVER_H */

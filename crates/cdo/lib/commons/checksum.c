@@ -1,11 +1,33 @@
-#include "core/checksum.h"
-#include "core/output.h"
+#include "commons/checksum.h"
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+
+/* ============================================================
+ * Internal error/warning helpers (replaces core/output.h dependency)
+ * ============================================================ */
+
+static void checksum_error(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "error: ");
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+}
+
+static void checksum_warn(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "warning: ");
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+}
 
 /* ============================================================
  * Minimal SHA-256 / SHA-384 / SHA-512 implementation
@@ -340,7 +362,7 @@ int checksum_parse(const char* str, ChecksumSpec* out) {
     /* Find the colon separator */
     const char* colon = strchr(str, ':');
     if (!colon) {
-        cdo_error("malformed checksum: expected 'algorithm:hex_digest' format, got '%s'", str);
+        checksum_error("malformed checksum: expected 'algorithm:hex_digest' format, got '%s'", str);
         return -1;
     }
 
@@ -355,7 +377,7 @@ int checksum_parse(const char* str, ChecksumSpec* out) {
     } else if (algo_len == 6 && strncmp(str, "sha512", 6) == 0) {
         out->algorithm = CHECKSUM_SHA512;
     } else {
-        cdo_error("unsupported checksum algorithm: '%.*s' (supported: sha256, sha384, sha512)",
+        checksum_error("unsupported checksum algorithm: '%.*s' (supported: sha256, sha384, sha512)",
                   (int)algo_len, str);
         return -1;
     }
@@ -370,7 +392,7 @@ int checksum_parse(const char* str, ChecksumSpec* out) {
     }
 
     if (digest_len != expected_len) {
-        cdo_error("checksum hex_digest length mismatch: expected %zu characters for %.*s, got %zu",
+        checksum_error("checksum hex_digest length mismatch: expected %zu characters for %.*s, got %zu",
                   expected_len, (int)algo_len, str, digest_len);
         return -1;
     }
@@ -378,7 +400,7 @@ int checksum_parse(const char* str, ChecksumSpec* out) {
     /* Validate all characters are lowercase hex */
     for (size_t i = 0; i < digest_len; i++) {
         if (!is_hex_char(digest[i])) {
-            cdo_error("checksum hex_digest contains invalid character '%c' at position %zu", digest[i], i);
+            checksum_error("checksum hex_digest contains invalid character '%c' at position %zu", digest[i], i);
             return -1;
         }
     }
@@ -460,14 +482,14 @@ int checksum_verify_buffer(const ChecksumSpec* expected,
 
     /* Validate the expected spec format first */
     if (checksum_validate_format(expected) != 0) {
-        cdo_error("invalid checksum spec format");
+        checksum_error("invalid checksum spec format");
         return -1;
     }
 
     /* Compute actual hash */
     int rc = checksum_compute(data, data_len, expected->algorithm, actual_hex);
     if (rc != 0) {
-        cdo_error("failed to compute hash");
+        checksum_error("failed to compute hash");
         return -1;
     }
 
@@ -484,14 +506,14 @@ int checksum_verify_file(const char* filepath, const ChecksumSpec* expected) {
 
     /* Validate checksum format before reading the file */
     if (checksum_validate_format(expected) != 0) {
-        cdo_error("invalid checksum format for file '%s'", filepath);
+        checksum_error("invalid checksum format for file '%s'", filepath);
         return -1;
     }
 
     /* Read the file into memory */
     FILE* f = fopen(filepath, "rb");
     if (!f) {
-        cdo_error("cannot open file for checksum verification: '%s'", filepath);
+        checksum_error("cannot open file for checksum verification: '%s'", filepath);
         return -1;
     }
 
@@ -502,7 +524,7 @@ int checksum_verify_file(const char* filepath, const ChecksumSpec* expected) {
 
     if (file_size < 0) {
         fclose(f);
-        cdo_error("cannot determine file size: '%s'", filepath);
+        checksum_error("cannot determine file size: '%s'", filepath);
         return -1;
     }
 
@@ -511,14 +533,14 @@ int checksum_verify_file(const char* filepath, const ChecksumSpec* expected) {
         buf = (unsigned char*)malloc((size_t)file_size);
         if (!buf) {
             fclose(f);
-            cdo_error("out of memory reading file for checksum: '%s'", filepath);
+            checksum_error("out of memory reading file for checksum: '%s'", filepath);
             return -1;
         }
         size_t read = fread(buf, 1, (size_t)file_size, f);
         if (read != (size_t)file_size) {
             free(buf);
             fclose(f);
-            cdo_error("failed to read file for checksum: '%s'", filepath);
+            checksum_error("failed to read file for checksum: '%s'", filepath);
             return -1;
         }
     }
@@ -531,11 +553,11 @@ int checksum_verify_file(const char* filepath, const ChecksumSpec* expected) {
 
     if (rc == 1) {
         /* Mismatch — delete the file and report */
-        cdo_error("checksum mismatch for '%s'", filepath);
-        cdo_error("  expected: %s", expected->hex_digest);
-        cdo_error("  actual:   %s", actual_hex);
+        checksum_error("checksum mismatch for '%s'", filepath);
+        checksum_error("  expected: %s", expected->hex_digest);
+        checksum_error("  actual:   %s", actual_hex);
         if (remove(filepath) != 0) {
-            cdo_warn("failed to delete archive with mismatched checksum: '%s'", filepath);
+            checksum_warn("failed to delete archive with mismatched checksum: '%s'", filepath);
         }
         return 1;
     } else if (rc != 0) {

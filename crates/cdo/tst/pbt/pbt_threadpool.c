@@ -8,7 +8,7 @@
  */
 #include "cdo_ut.h"
 #include "vendor/theft.h"
-#include "core/threadpool.h"
+#include "commons/threadpool.h"
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN

@@ -1,5 +1,5 @@
 #include "commands/test_protocol.h"
-#include "core/json.h"
+#include "commons/json.h"
 #include <string.h>
 #include <stdio.h>
 
