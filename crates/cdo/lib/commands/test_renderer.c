@@ -22,20 +22,20 @@ void test_renderer_result(const TestProtocolMsg *msg, bool use_color) {
     switch (msg->status) {
     case TEST_STATUS_PASS:
         if (use_color) {
-            printf("  %s" "\xE2\x9C\x93" " %s%s (%.2fms)\n",
-                   ANSI_GREEN, msg->name, ANSI_RESET, msg->duration_ms);
+            printf("  %sPASS%s %s (%.2fms)\n",
+                   ANSI_GREEN, ANSI_RESET, msg->name, msg->duration_ms);
         } else {
-            printf("  " "\xE2\x9C\x93" " %s (%.2fms)\n",
+            printf("  PASS %s (%.2fms)\n",
                    msg->name, msg->duration_ms);
         }
         break;
 
     case TEST_STATUS_FAIL:
         if (use_color) {
-            printf("  %s" "\xE2\x9C\x97" " %s%s (%.2fms)\n",
-                   ANSI_RED, msg->name, ANSI_RESET, msg->duration_ms);
+            printf("  %sFAIL%s %s (%.2fms)\n",
+                   ANSI_RED, ANSI_RESET, msg->name, msg->duration_ms);
         } else {
-            printf("  " "\xE2\x9C\x97" " %s (%.2fms)\n",
+            printf("  FAIL %s (%.2fms)\n",
                    msg->name, msg->duration_ms);
         }
         // Print failure details indented below
@@ -51,9 +51,9 @@ void test_renderer_result(const TestProtocolMsg *msg, bool use_color) {
 
     case TEST_STATUS_SKIP:
         if (use_color) {
-            printf("  %s- %s%s\n", ANSI_YELLOW, msg->name, ANSI_RESET);
+            printf("  %sSKIP%s %s\n", ANSI_YELLOW, ANSI_RESET, msg->name);
         } else {
-            printf("  - %s\n", msg->name);
+            printf("  SKIP %s\n", msg->name);
         }
         break;
     }

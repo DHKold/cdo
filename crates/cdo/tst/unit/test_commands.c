@@ -70,14 +70,11 @@ TEST(cmd_deps_add_resolves) {
 // --- cmd_build ---
 
 TEST(cmd_build_compiles_sources) {
-    // Invoke cmd_build on the current workspace. Since the test binary is
-    // running from the workspace root, cmd_build should load the workspace,
-    // resolve build order, and attempt compilation. We pass a single known
-    // crate name ("cdo") so it doesn't try to rebuild everything.
-    // This test verifies that cmd_build at least reaches the compilation
-    // stage without crashing. In a CI environment it should succeed (compiler
-    // is available); in a test environment it exercises the full path.
-    const char* positional[] = {"cdo"};
+    // Invoke cmd_build on a crate that won't try to relink the running
+    // test binary. We target "cdo_ut" which is a small library crate.
+    // (Building "cdo" would attempt to re-link cdo_test.exe — the binary
+    // currently executing — which fails on Windows due to file locking.)
+    const char* positional[] = {"cdo_ut"};
     CdoOptions opts = {0};
     opts.command = CDO_CMD_BUILD;
     opts.positional_args = positional;
@@ -85,7 +82,7 @@ TEST(cmd_build_compiles_sources) {
     opts.jobs = 1;  // single-threaded to keep output deterministic
 
     // This invokes workspace_load, workspace_resolve, compiler_detect,
-    // scanner_scan_sources, and compiler_compile_batch for the cdo crate.
+    // scanner_scan_sources, and compiler_compile_batch for the cdo_ut crate.
     int rc = cmd_build(&opts);
     // Build should succeed (compiler is available since we're running the
     // test binary built by this very build system)

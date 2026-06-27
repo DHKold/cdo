@@ -55,3 +55,13 @@ powershell -File build.ps1 -Clean  # Remove build artifacts
 | CDo debug binary | `build\debug\cdo\cdo.exe` |
 | Test binary | `build\release\cdo_pbt\cdo_pbt.exe` |
 | Workspace root | (this repo root) |
+
+# CDo Testing framework
+
+To test a create (run the tests) use:
+
+```
+.\cdo.exe test <crate>
+```
+
+Check the test help for more information
