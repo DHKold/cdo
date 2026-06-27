@@ -6,14 +6,14 @@ This plan implements three CDo enhancements: (1) comprehensive README documentat
 
 ## Tasks
 
-- [ ] 1. Implement PAL extensions
-  - [ ] 1.1 Add new PAL function declarations to `pal.h`
+- [x] 1. Implement PAL extensions
+  - [x] 1.1 Add new PAL function declarations to `pal.h`
     - Add `pal_get_executable_path`, `pal_file_copy`, `pal_file_lock_exclusive`, `pal_file_lock_release` declarations
     - Add `PalFileLock` opaque typedef
     - Add `PAL_ERR_TIMEOUT` error code if not already defined
     - _Requirements: 9.1, 9.2, 9.5_
 
-  - [ ] 1.2 Implement `pal_file_lock.c` with cross-platform file locking
+  - [x] 1.2 Implement `pal_file_lock.c` with cross-platform file locking
     - Windows: `CreateFileW` + `LockFileEx` with `LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY` in a retry loop (50ms sleep between retries)
     - Unix: `open` + `flock(LOCK_EX | LOCK_NB)` in a retry loop (50ms nanosleep between retries)
     - Implement `pal_file_lock_exclusive` with timeout parameter (milliseconds)
@@ -21,18 +21,18 @@ This plan implements three CDo enhancements: (1) comprehensive README documentat
     - Return `PAL_ERR_TIMEOUT` when timeout expires, `PAL_ERR_IO` on I/O errors
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
 
-  - [ ] 1.3 Implement `pal_get_executable_path` and `pal_file_copy` in appropriate PAL source file
+  - [x] 1.3 Implement `pal_get_executable_path` and `pal_file_copy` in appropriate PAL source file
     - Windows: `GetModuleFileNameW(NULL, ...)` for exe path; `CopyFileW` for file copy
     - Unix: read `/proc/self/exe` (Linux) or `_NSGetExecutablePath` (macOS) for exe path; `open`/`read`/`write` loop with `fchmod` for file copy preserving executable bit
     - _Requirements: 3.2_
 
-- [ ] 2. Implement Build Lock Manager
-  - [ ] 2.1 Create `build_lock.h` header with public API
+- [x] 2. Implement Build Lock Manager
+  - [x] 2.1 Create `build_lock.h` header with public API
     - Define `BuildLock` opaque typedef
     - Declare `build_lock_acquire(workspace_root, timeout_sec, lock_out)` and `build_lock_release(lock)`
     - _Requirements: 7.1, 7.2, 8.1_
 
-  - [ ] 2.2 Implement `build_lock.c`
+  - [x] 2.2 Implement `build_lock.c`
     - `build_lock_acquire`: construct `.cdo/build.lock` path, ensure `.cdo` dir exists, call `pal_file_lock_exclusive` with `timeout_sec * 1000` ms
     - Write diagnostic JSON (PID + timestamp + command) into lock file after acquisition
     - Check `CDO_BUILD_LOCK_HELD` env var for re-entrancy — if set, skip acquisition and return success with NULL lock
@@ -47,20 +47,20 @@ This plan implements three CDo enhancements: (1) comprehensive README documentat
     - **Property 9: Lock file contains valid diagnostic metadata**
     - **Validates: Requirements 8.3**
 
-- [ ] 3. Integrate build lock into CLI commands
-  - [ ] 3.1 Add `lock_timeout` field to `CdoOptions` in `cli.h`
+- [x] 3. Integrate build lock into CLI commands
+  - [x] 3.1 Add `lock_timeout` field to `CdoOptions` in `cli.h`
     - Add `int lock_timeout;` field (default sentinel -1 meaning use 30s default)
     - Parse `--lock-timeout <N>` in `cdo_cli_parse`
     - _Requirements: 10.1, 10.2, 10.3_
 
-  - [ ] 3.2 Integrate build lock into `cmd_build.c`
+  - [x] 3.2 Integrate build lock into `cmd_build.c`
     - Acquire lock after workspace load, before compilation
     - Set `CDO_BUILD_LOCK_HELD=1` env var after acquisition
     - Release lock on all exit paths (success and failure)
     - Print error with diagnostic info on timeout
     - _Requirements: 7.1, 7.4, 7.5, 8.1, 8.2, 10.1, 10.3_
 
-  - [ ] 3.3 Integrate build lock into `cmd_test.c`
+  - [x] 3.3 Integrate build lock into `cmd_test.c`
     - Acquire lock before calling internal build step
     - Set `CDO_BUILD_LOCK_HELD=1` env var so nested `cmd_build` calls skip lock acquisition
     - Clear env var and release lock after test completes (all exit paths)
@@ -71,25 +71,25 @@ This plan implements three CDo enhancements: (1) comprehensive README documentat
     - **Property 8: Lock is always released after command completion**
     - **Validates: Requirements 7.1, 7.2, 8.1, 8.2**
 
-- [ ] 4. Checkpoint - Verify build lock functionality
+- [x] 4. Checkpoint - Verify build lock functionality
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Implement Virtual Environment feature
-  - [ ] 5.1 Implement `venv_init` function in `cmd_new.c`
+- [x] 5. Implement Virtual Environment feature
+  - [x] 5.1 Implement `venv_init` function in `cmd_new.c`
     - Create `.cdo` directory (preserve existing `tools/` and `cache/`)
     - Call `pal_get_executable_path` to get current binary path
     - Call `pal_file_copy` to copy binary into `.cdo/cdo.exe` (or `.cdo/cdo` on Unix)
     - Call script generators for all three platforms
     - _Requirements: 3.1, 3.2, 3.3, 3.5_
 
-  - [ ] 5.2 Implement activation script generators
+  - [x] 5.2 Implement activation script generators
     - `venv_generate_activate_bat`: writes `activate.bat` with `set`/`%VAR%` syntax, `doskey deactivate` command
     - `venv_generate_activate_ps1`: writes `activate.ps1` with `$env:VAR` syntax, `deactivate` function
     - `venv_generate_activate_sh`: writes `activate.sh` with `export` syntax, `deactivate()` function
     - Each script: stores original PATH/prompt, prepends `.cdo` to PATH, sets `CDO_HOME`/`CDO_VENV`, modifies prompt with `(cdo)` prefix
     - _Requirements: 3.3, 3.4, 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.2, 5.3, 5.4, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6_
 
-  - [ ] 5.3 Integrate `--venv` flag into `cmd_init` dispatch
+  - [x] 5.3 Integrate `--venv` flag into `cmd_init` dispatch
     - Parse `--venv` flag in options
     - Call `venv_init(workspace_root)` when flag is present, after existing template logic
     - _Requirements: 3.1_
@@ -114,11 +114,11 @@ This plan implements three CDo enhancements: (1) comprehensive README documentat
     - **Property 5: Generated scripts use platform-appropriate syntax**
     - **Validates: Requirements 6.1, 6.2, 6.3, 6.4, 6.5, 6.6**
 
-- [ ] 6. Checkpoint - Verify venv functionality
+- [x] 6. Checkpoint - Verify venv functionality
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 7. Write comprehensive README
-  - [ ] 7.1 Write README with full feature documentation and quick-start guide
+- [x] 7. Write comprehensive README
+  - [x] 7.1 Write README with full feature documentation and quick-start guide
     - Overview/Introduction section
     - Installation & Prerequisites section
     - Quick Start: `cdo init` → `cdo build` → `cdo run` workflow with example shell commands
@@ -129,7 +129,7 @@ This plan implements three CDo enhancements: (1) comprehensive README documentat
     - Contributing / License section
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 2.4_
 
-- [ ] 8. Final checkpoint - Ensure all tests pass
+- [x] 8. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

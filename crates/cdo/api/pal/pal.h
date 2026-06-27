@@ -55,6 +55,37 @@ int pal_is_tty(int fd);
 /// Returns current monotonic time in milliseconds.
 uint64_t pal_time_ms(void);
 
+// --- File Locking ---
+
+/// Opaque file lock handle.
+typedef struct PalFileLock PalFileLock;
+
+/// Acquire an exclusive lock on the file at `path`.
+/// Creates the file if it doesn't exist.
+/// Blocks up to `timeout_ms` milliseconds (0 = non-blocking try).
+///
+/// @param path        File path to lock
+/// @param timeout_ms  Maximum wait time in milliseconds (0 = try once)
+/// @param lock_out    On success, receives the lock handle
+/// @return PAL_OK on success, PAL_ERR_TIMEOUT on timeout, PAL_ERR_IO on error
+int pal_file_lock_exclusive(const char* path, int timeout_ms, PalFileLock** lock_out);
+
+/// Release a previously acquired file lock.
+/// Closes the underlying file handle, which releases the OS-level lock.
+/// After this call, the lock handle is invalid.
+void pal_file_lock_release(PalFileLock* lock);
+
+// --- File Utilities ---
+
+/// Get the absolute path of the currently running executable.
+/// Returns 0 on success, PAL_ERR_IO on failure.
+int pal_get_executable_path(char* buf, size_t buf_size);
+
+/// Copy a file from src to dst. Creates dst if it doesn't exist,
+/// overwrites if it does. Preserves executable permissions on Unix.
+/// Returns 0 on success, non-zero on failure.
+int pal_file_copy(const char* src, const char* dst);
+
 // --- Path Utilities ---
 
 /// Normalize a path in-place: convert backslashes to forward slashes,

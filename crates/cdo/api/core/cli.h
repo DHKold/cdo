@@ -42,10 +42,12 @@ typedef struct {
     bool            list;               // --list flag (test: list test names)
     bool            filter_tools;       // --tools flag (catalog list filter)
     bool            filter_packages;    // --packages flag (catalog list filter)
+    bool            venv;               // --venv flag (init: create virtual environment)
     const char*     profile;
     const char*     filter;             // --filter <pattern> (test: filter pattern)
     const char*     version_constraint; // --version <constraint>
     int             jobs;           // 0 = auto-detect
+    int             lock_timeout;   // --lock-timeout <seconds> (0 = immediate fail, -1 = unset/use default 30s)
     int             argc_rest;      // args after --
     const char**    argv_rest;
     int             positional_count;

@@ -10,7 +10,7 @@
 
 // --- cmd_tool ---
 
-TEST(cmd_tool_resolves_valid) {
+TEST_SERIAL(cmd_tool_resolves_valid) {
     // Invoke the tool command handler with "install" and a valid tool name
     // ("w64devkit"). The catalog resolution should be invoked. Since we're
     // running from the workspace root, the catalog is available.
@@ -48,7 +48,7 @@ TEST(cmd_tool_resolves_valid) {
 
 // --- cmd_deps ---
 
-TEST(cmd_deps_add_resolves) {
+TEST_SERIAL(cmd_deps_add_resolves) {
     // Invoke the deps "add" subcommand with a package name.
     // Since we're likely not in a crate directory with crate.toml at cwd,
     // this should fail gracefully with a non-zero return code (cannot read
@@ -69,7 +69,7 @@ TEST(cmd_deps_add_resolves) {
 
 // --- cmd_build ---
 
-TEST(cmd_build_compiles_sources) {
+TEST_SERIAL(cmd_build_compiles_sources) {
     // Invoke cmd_build on a crate that won't try to relink the running
     // test binary. We target "cdo_ut" which is a small library crate.
     // (Building "cdo" would attempt to re-link cdo_test.exe — the binary
@@ -91,7 +91,7 @@ TEST(cmd_build_compiles_sources) {
     return 0;
 }
 
-TEST(cmd_build_failure_reports_error) {
+TEST_SERIAL(cmd_build_failure_reports_error) {
     // Invoke cmd_build with a non-existent crate name. The workspace should
     // load fine but resolve should fail because the crate is unknown.
     // This exercises the error reporting path in cmd_build.

@@ -17,6 +17,14 @@ int cmd_new(const CdoOptions* opts);
 /// Same as cmd_new but operates in-place (current working directory).
 int cmd_init(const CdoOptions* opts);
 
+/// Initialize a virtual environment in the given workspace root.
+/// Creates .cdo/ directory structure, copies current executable,
+/// and generates activation scripts.
+/// If .cdo/ already exists, preserves tools/ and cache/ but
+/// regenerates scripts and binary.
+/// Returns 0 on success, non-zero on failure.
+int venv_init(const char* workspace_root);
+
 #ifdef __cplusplus
 }
 #endif

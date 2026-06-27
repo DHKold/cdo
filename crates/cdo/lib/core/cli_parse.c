@@ -64,9 +64,10 @@ static int parse_int(const char* str) {
 
 int cdo_cli_parse(int argc, char** argv, CdoOptions* opts) {
     memset(opts, 0, sizeof(*opts));
-    opts->color     = CDO_COLOR_AUTO;
-    opts->log_level = CDO_LOG_INFO;
-    opts->command   = CDO_CMD_HELP;
+    opts->color        = CDO_COLOR_AUTO;
+    opts->log_level    = CDO_LOG_INFO;
+    opts->command      = CDO_CMD_HELP;
+    opts->lock_timeout = -1;
 
     if (argc < 2) return 0;
 
@@ -198,6 +199,20 @@ int cdo_cli_parse(int argc, char** argv, CdoOptions* opts) {
             }
             if (strcmp(arg, "--packages") == 0) {
                 opts->filter_packages = true;
+                continue;
+            }
+            if (strcmp(arg, "--venv") == 0) {
+                opts->venv = true;
+                continue;
+            }
+            if (strncmp(arg, "--lock-timeout=", 15) == 0) {
+                opts->lock_timeout = parse_int(arg + 15);
+                continue;
+            }
+            if (strcmp(arg, "--lock-timeout") == 0) {
+                if (i + 1 < argc) {
+                    opts->lock_timeout = parse_int(argv[++i]);
+                }
                 continue;
             }
             // Unrecognized option — skip (could be command-specific)

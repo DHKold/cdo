@@ -1,4 +1,5 @@
 #include "cmd_build_internal.h"
+#include "commands/build_lock.h"
 #include "core/compiler.h"
 #include "core/scanner.h"
 #include "core/module.h"
@@ -137,6 +138,28 @@ int cmd_build(const CdoOptions* opts) {
         return 1;
     }
 
+    // --- Step 1b: Acquire build lock ---
+    int lock_timeout = (opts->lock_timeout >= 0) ? opts->lock_timeout : 30;
+    BuildLock* lock = NULL;
+    int lock_rc = build_lock_acquire(ws.root_path, lock_timeout, &lock);
+    if (lock_rc != 0) {
+        if (lock_rc == PAL_ERR_TIMEOUT) {
+            cdo_error("could not acquire build lock within %d seconds "
+                      "(another cdo process may be building)", lock_timeout);
+        } else {
+            cdo_error("failed to acquire build lock");
+        }
+        workspace_free(&ws);
+        return 1;
+    }
+
+    // Set re-entrancy env var so nested builds (e.g., cmd_test → cmd_build) skip locking
+#ifdef _WIN32
+    _putenv_s("CDO_BUILD_LOCK_HELD", "1");
+#else
+    setenv("CDO_BUILD_LOCK_HELD", "1", 1);
+#endif
+
     // --- Step 2: Resolve build order ---
     const char** crate_names = NULL;
     int crate_name_count = 0;
@@ -164,6 +187,7 @@ int cmd_build(const CdoOptions* opts) {
                 }
             }
         }
+        build_lock_release(lock);
         workspace_free(&ws);
         return 1;
     }
@@ -180,6 +204,7 @@ int cmd_build(const CdoOptions* opts) {
             }
             if (!found) {
                 cdo_error("unknown crate: '%s'", crate_names[i]);
+                build_lock_release(lock);
                 workspace_free(&ws);
                 return 1;
             }
@@ -191,6 +216,7 @@ int cmd_build(const CdoOptions* opts) {
     rc = compiler_detect(&compiler);
     if (rc != 0) {
         cdo_error("no C/C++ compiler found on PATH or vendored tools");
+        build_lock_release(lock);
         workspace_free(&ws);
         return 1;
     }
@@ -447,6 +473,7 @@ int cmd_build(const CdoOptions* opts) {
     }
 
     build_profile_free(&build_profile);
+    build_lock_release(lock);
     workspace_free(&ws);
     return failed ? 1 : 0;
 }

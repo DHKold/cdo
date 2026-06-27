@@ -396,6 +396,212 @@ int cmd_new(const CdoOptions* opts) {
 }
 
 // ---------------------------------------------------------------------------
+// Venv: activation script generators
+// ---------------------------------------------------------------------------
+
+static int venv_generate_activate_bat(const char* cdo_dir) {
+    char path[MAX_PATH_LEN];
+    if (pal_path_join(path, sizeof(path), cdo_dir, "activate.bat") != 0) {
+        cdo_error("Path too long for activate.bat");
+        return -1;
+    }
+
+    const char* content =
+        "@echo off\r\n"
+        "REM CDo Virtual Environment Activation (Windows CMD)\r\n"
+        "set \"CDO_VENV_OLD_PATH=%PATH%\"\r\n"
+        "set \"CDO_VENV_OLD_PROMPT=%PROMPT%\"\r\n"
+        "set \"CDO_HOME=%~dp0\"\r\n"
+        "set \"CDO_VENV=%~dp0\"\r\n"
+        "set \"PATH=%~dp0;%PATH%\"\r\n"
+        "set \"PROMPT=(cdo) %PROMPT%\"\r\n"
+        "echo CDo virtual environment activated.\r\n"
+        "echo Use 'deactivate' to restore the original environment.\r\n"
+        "doskey deactivate=set \"PATH=%CDO_VENV_OLD_PATH%\" $T set \"PROMPT=%CDO_VENV_OLD_PROMPT%\" $T set \"CDO_HOME=\" $T set \"CDO_VENV=\" $T set \"CDO_VENV_OLD_PATH=\" $T set \"CDO_VENV_OLD_PROMPT=\"\r\n";
+
+    if (pal_file_write(path, content, strlen(content)) != 0) {
+        cdo_error("Failed to write activate.bat: %s", path);
+        return -1;
+    }
+
+    cdo_debug("Generated: activate.bat");
+    return 0;
+}
+
+static int venv_generate_activate_ps1(const char* cdo_dir) {
+    char path[MAX_PATH_LEN];
+    if (pal_path_join(path, sizeof(path), cdo_dir, "activate.ps1") != 0) {
+        cdo_error("Path too long for activate.ps1");
+        return -1;
+    }
+
+    const char* content =
+        "# CDo Virtual Environment Activation (PowerShell)\r\n"
+        "$script:CDO_VENV_OLD_PATH = $env:PATH\r\n"
+        "$script:CDO_VENV_OLD_PROMPT = $function:prompt\r\n"
+        "\r\n"
+        "$env:CDO_HOME = $PSScriptRoot\r\n"
+        "$env:CDO_VENV = $PSScriptRoot\r\n"
+        "$env:PATH = \"$PSScriptRoot;$env:PATH\"\r\n"
+        "\r\n"
+        "function global:prompt {\r\n"
+        "    \"(cdo) \" + (& $script:CDO_VENV_OLD_PROMPT)\r\n"
+        "}\r\n"
+        "\r\n"
+        "function global:deactivate {\r\n"
+        "    $env:PATH = $script:CDO_VENV_OLD_PATH\r\n"
+        "    Remove-Item Env:CDO_HOME -ErrorAction SilentlyContinue\r\n"
+        "    Remove-Item Env:CDO_VENV -ErrorAction SilentlyContinue\r\n"
+        "    $function:global:prompt = $script:CDO_VENV_OLD_PROMPT\r\n"
+        "    Remove-Item Function:deactivate\r\n"
+        "}\r\n"
+        "\r\n"
+        "Write-Host \"CDo virtual environment activated.\"\r\n"
+        "Write-Host \"Use 'deactivate' to restore the original environment.\"\r\n";
+
+    if (pal_file_write(path, content, strlen(content)) != 0) {
+        cdo_error("Failed to write activate.ps1: %s", path);
+        return -1;
+    }
+
+    cdo_debug("Generated: activate.ps1");
+    return 0;
+}
+
+static int venv_generate_activate_sh(const char* cdo_dir) {
+    char path[MAX_PATH_LEN];
+    if (pal_path_join(path, sizeof(path), cdo_dir, "activate.sh") != 0) {
+        cdo_error("Path too long for activate.sh");
+        return -1;
+    }
+
+    const char* content =
+        "#!/bin/sh\n"
+        "# CDo Virtual Environment Activation (POSIX)\n"
+        "_CDO_VENV_OLD_PATH=\"$PATH\"\n"
+        "_CDO_VENV_OLD_PS1=\"${PS1:-}\"\n"
+        "\n"
+        "CDO_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n"
+        "export CDO_HOME=\"$CDO_DIR\"\n"
+        "export CDO_VENV=\"$CDO_DIR\"\n"
+        "export PATH=\"$CDO_DIR:$PATH\"\n"
+        "PS1=\"(cdo) ${PS1:-}\"\n"
+        "export PS1\n"
+        "\n"
+        "deactivate() {\n"
+        "    export PATH=\"$_CDO_VENV_OLD_PATH\"\n"
+        "    PS1=\"$_CDO_VENV_OLD_PS1\"\n"
+        "    export PS1\n"
+        "    unset CDO_HOME\n"
+        "    unset CDO_VENV\n"
+        "    unset _CDO_VENV_OLD_PATH\n"
+        "    unset _CDO_VENV_OLD_PS1\n"
+        "    unset -f deactivate\n"
+        "}\n"
+        "\n"
+        "echo \"CDo virtual environment activated.\"\n"
+        "echo \"Use 'deactivate' to restore the original environment.\"\n";
+
+    if (pal_file_write(path, content, strlen(content)) != 0) {
+        cdo_error("Failed to write activate.sh: %s", path);
+        return -1;
+    }
+
+    cdo_debug("Generated: activate.sh");
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// venv_init: create .cdo virtual environment structure
+// ---------------------------------------------------------------------------
+
+int venv_init(const char* workspace_root) {
+    char cdo_dir[MAX_PATH_LEN];
+
+    // 1. Build .cdo directory path
+    if (pal_path_join(cdo_dir, sizeof(cdo_dir), workspace_root, ".cdo") != 0) {
+        cdo_error("Path too long for .cdo directory");
+        return -1;
+    }
+
+    // 2. Create .cdo directory (pal_mkdir_p preserves existing content)
+    if (pal_mkdir_p(cdo_dir) != 0) {
+        cdo_error("Failed to create .cdo directory: %s", cdo_dir);
+        return -1;
+    }
+
+    // 3. Get the path of the currently running executable
+    char self_path[MAX_PATH_LEN];
+    if (pal_get_executable_path(self_path, sizeof(self_path)) != 0) {
+        cdo_error("Failed to determine current executable path");
+        return -1;
+    }
+
+    // 4. Copy current executable into .cdo/
+    char dest_exe[MAX_PATH_LEN];
+#ifdef _WIN32
+    if (pal_path_join(dest_exe, sizeof(dest_exe), cdo_dir, "cdo.exe") != 0) {
+#else
+    if (pal_path_join(dest_exe, sizeof(dest_exe), cdo_dir, "cdo") != 0) {
+#endif
+        cdo_error("Path too long for destination executable");
+        return -1;
+    }
+
+    if (pal_file_copy(self_path, dest_exe) != 0) {
+        cdo_error("Failed to copy executable to %s", dest_exe);
+        return -1;
+    }
+
+    // 5. Generate activation scripts for all platforms
+    if (venv_generate_activate_bat(cdo_dir) != 0) {
+        cdo_error("Failed to generate activate.bat");
+        return -1;
+    }
+    if (venv_generate_activate_ps1(cdo_dir) != 0) {
+        cdo_error("Failed to generate activate.ps1");
+        return -1;
+    }
+    if (venv_generate_activate_sh(cdo_dir) != 0) {
+        cdo_error("Failed to generate activate.sh");
+        return -1;
+    }
+
+    cdo_info("Virtual environment initialized in %s", cdo_dir);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: get the first non-flag positional argument (skips --prefixed args)
+// ---------------------------------------------------------------------------
+
+static const char* get_first_positional(const CdoOptions* opts) {
+    for (int i = 0; i < opts->positional_count; i++) {
+        if (opts->positional_args[i][0] != '-') {
+            return opts->positional_args[i];
+        }
+    }
+    return NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: get the second non-flag positional argument
+// ---------------------------------------------------------------------------
+
+static const char* get_second_positional(const CdoOptions* opts) {
+    int found = 0;
+    for (int i = 0; i < opts->positional_count; i++) {
+        if (opts->positional_args[i][0] != '-') {
+            found++;
+            if (found == 2) {
+                return opts->positional_args[i];
+            }
+        }
+    }
+    return NULL;
+}
+
+// ---------------------------------------------------------------------------
 // cmd_init: initialize a new project in the current directory
 // ---------------------------------------------------------------------------
 
@@ -405,54 +611,67 @@ int cmd_init(const CdoOptions* opts) {
         return list_available_templates();
     }
 
-    // Validate arguments: need at least a template name
-    if (opts->positional_count < 1) {
-        cdo_error("Usage: cdo init <template>");
+    bool want_venv = opts->venv;
+    const char* template_name = get_first_positional(opts);
+
+    // Validate: need at least a template name OR --venv flag
+    if (!template_name && !want_venv) {
+        cdo_error("Usage: cdo init <template> [--venv]");
         cdo_info("Use --list to see available templates.");
+        cdo_info("Use --venv to create a virtual environment without a template.");
         return -1;
     }
 
-    const char* template_name = opts->positional_args[0];
-    bool force = has_flag(opts, "--force");
+    // Template instantiation (only if a template name was provided)
+    if (template_name) {
+        bool force = has_flag(opts, "--force");
 
-    // Use current directory as target
-    const char* dest_dir = ".";
+        // Use current directory as target
+        const char* dest_dir = ".";
 
-    // Check if current directory is non-empty
-    if (is_directory_non_empty(dest_dir)) {
-        if (!force) {
-            cdo_error("Current directory is not empty.");
-            cdo_info("Use --force to initialize the project anyway.");
+        // Check if current directory is non-empty
+        if (is_directory_non_empty(dest_dir)) {
+            if (!force) {
+                cdo_error("Current directory is not empty.");
+                cdo_info("Use --force to initialize the project anyway.");
+                return -1;
+            }
+            cdo_warn("Current directory is not empty, proceeding with --force.");
+        }
+
+        // Fetch the template
+        char template_dir[MAX_PATH_LEN];
+        if (fetch_template(template_name, template_dir, sizeof(template_dir)) != 0) {
             return -1;
         }
-        cdo_warn("Current directory is not empty, proceeding with --force.");
+
+        // Determine project name from positional args or fall back to template name
+        const char* project_name = get_second_positional(opts);
+        if (!project_name) {
+            project_name = template_name;
+        }
+
+        // Build template variables
+        TemplateVar vars[MAX_VARS];
+        int var_count = 0;
+        build_default_vars(project_name, vars, &var_count);
+
+        // Instantiate template
+        cdo_info("Initializing project from template '%s'...", template_name);
+        if (instantiate_template(template_dir, dest_dir, vars, var_count) != 0) {
+            cdo_error("Failed to instantiate template.");
+            return -1;
+        }
+
+        cdo_info("Project initialized successfully.");
+        cdo_info("  cdo build");
     }
 
-    // Fetch the template
-    char template_dir[MAX_PATH_LEN];
-    if (fetch_template(template_name, template_dir, sizeof(template_dir)) != 0) {
-        return -1;
+    // If --venv flag is present, initialize virtual environment
+    if (want_venv) {
+        int rc = venv_init(".");
+        if (rc != 0) return rc;
     }
 
-    // Determine project name from the current directory name
-    // Try to get from positional args or fall back to directory name
-    const char* project_name = (opts->positional_count >= 2)
-        ? opts->positional_args[1]
-        : template_name;
-
-    // Build template variables
-    TemplateVar vars[MAX_VARS];
-    int var_count = 0;
-    build_default_vars(project_name, vars, &var_count);
-
-    // Instantiate template
-    cdo_info("Initializing project from template '%s'...", template_name);
-    if (instantiate_template(template_dir, dest_dir, vars, var_count) != 0) {
-        cdo_error("Failed to instantiate template.");
-        return -1;
-    }
-
-    cdo_info("Project initialized successfully.");
-    cdo_info("  cdo build");
     return 0;
 }

@@ -1,5 +1,6 @@
 #include "commands/cmd_test.h"
 #include "commands/cmd_build.h"
+#include "commands/build_lock.h"
 #include "commands/test_protocol.h"
 #include "commands/test_renderer.h"
 #include "commands/test_coverage.h"
@@ -9,6 +10,7 @@
 #include "pal/pal.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 int cmd_test(const CdoOptions* opts) {
     if (opts->help) {
@@ -68,6 +70,30 @@ int cmd_test(const CdoOptions* opts) {
         workspace_free(&ws);
         return 1;
     }
+
+    // Acquire build lock for the test session (Req 7.2, 7.4, 7.5, 10.1, 10.3)
+    int lock_timeout = opts->lock_timeout;
+    if (lock_timeout < 0) {
+        lock_timeout = 30;  // Default 30s when unset (sentinel -1)
+    }
+    BuildLock* lock = NULL;
+    int lock_rc = build_lock_acquire(ws.root_path, lock_timeout, &lock);
+    if (lock_rc != 0) {
+        if (lock_rc == PAL_ERR_TIMEOUT) {
+            cdo_error("could not acquire build lock within %d seconds", lock_timeout);
+        } else {
+            cdo_error("failed to acquire build lock");
+        }
+        workspace_free(&ws);
+        return 1;
+    }
+
+    // Set re-entrancy flag so nested cmd_build calls skip locking (Req 8.1, 8.2)
+#ifdef _WIN32
+    _putenv_s("CDO_BUILD_LOCK_HELD", "1");
+#else
+    setenv("CDO_BUILD_LOCK_HELD", "1", 1);
+#endif
 
     // Aggregate totals across all crates
     int total_total = 0, total_passed = 0, total_failed = 0, total_skipped = 0;
@@ -326,7 +352,13 @@ int cmd_test(const CdoOptions* opts) {
                                               cov_files + cov_count,
                                               COVERAGE_MAX_FILES - cov_count);
                 if (result == -2) {
-                    // gcov not found — exit with code 2
+                    // gcov not found — release lock and exit with code 2
+#ifdef _WIN32
+                    _putenv_s("CDO_BUILD_LOCK_HELD", "");
+#else
+                    unsetenv("CDO_BUILD_LOCK_HELD");
+#endif
+                    build_lock_release(lock);
                     workspace_free(&ws);
                     return 2;
                 }
@@ -348,6 +380,14 @@ int cmd_test(const CdoOptions* opts) {
         test_renderer_summary(total_total, total_passed, total_failed, total_skipped,
                               total_duration_ms, coverage_pct, use_color);
     }
+
+    // Clear re-entrancy flag and release build lock (all exit paths)
+#ifdef _WIN32
+    _putenv_s("CDO_BUILD_LOCK_HELD", "");
+#else
+    unsetenv("CDO_BUILD_LOCK_HELD");
+#endif
+    build_lock_release(lock);
 
     workspace_free(&ws);
 
