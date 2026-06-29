@@ -1,7 +1,7 @@
 // crates/cdo_pbt/src/unit/test_scanner.c
 // Unit tests for Scanner module (scanner_scan_sources, scanner_scan_headers, filelist_free)
 #include "cdo_ut.h"
-#include "core/scanner.h"
+#include "model/scanner.h"
 #include "pal/pal.h"
 
 #include <string.h>

@@ -19,6 +19,9 @@ static const CommandEntry command_table[] = {
     { "doctor",  CDO_CMD_DOCTOR  },
     { "deps",    CDO_CMD_DEPS    },
     { "catalog", CDO_CMD_CATALOG },
+    { "cache",   CDO_CMD_CACHE   },
+    { "hook",    CDO_CMD_HOOK    },
+    { "fmt",     CDO_CMD_FMT     },
     { "help",    CDO_CMD_HELP    },
 };
 
@@ -203,6 +206,18 @@ int cdo_cli_parse(int argc, char** argv, CdoOptions* opts) {
                 opts->venv = true;
                 continue;
             }
+            if (strcmp(arg, "--no-cache") == 0) {
+                opts->no_cache = true;
+                continue;
+            }
+            if (strcmp(arg, "--cache") == 0) {
+                opts->cache = true;
+                continue;
+            }
+            if (strcmp(arg, "--check") == 0) {
+                opts->check = true;
+                continue;
+            }
             if (strncmp(arg, "--lock-timeout=", 15) == 0) {
                 opts->lock_timeout = parse_int(arg + 15);
                 continue;
@@ -261,7 +276,9 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "  init      Initialize a project in current directory\n"
             "  deps      Manage dependencies (add, remove, list)\n"
             "  catalog   Browse and search the package/tool catalog\n"
+            "  cache     Manage the build cache (stats, clear)\n"
             "  tool      Manage vendored tools\n"
+            "  fmt       Format source files\n"
             "  doctor    Diagnose environment issues\n\n"
             "Options:\n"
             "  -h, --help             Print help information\n"
@@ -338,11 +355,13 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "Arguments:\n"
             "  [CRATE]  Clean only a specific crate (default: all)\n\n"
             "Options:\n"
+            "      --cache            Also clear the build cache\n"
             "  -v, --verbose          Enable verbose output\n"
             "  -h, --help             Print help information\n\n"
             "Examples:\n"
             "  cdo clean              Remove all build artifacts\n"
             "  cdo clean my-lib       Clean a specific crate\n"
+            "  cdo clean --cache      Remove build artifacts and cache\n"
         );
         break;
     case CDO_CMD_NEW:
@@ -450,6 +469,38 @@ void cdo_cli_print_help(CdoCommand cmd, FILE* out) {
             "  cdo deps add theft --dev       Add as dev dependency\n"
             "  cdo deps remove sdl3           Remove a dependency\n"
             "  cdo deps list                  List all dependencies\n"
+        );
+        break;
+    case CDO_CMD_CACHE:
+        fprintf(out,
+            "Manage the build cache\n\n"
+            "Usage: cdo cache <SUBCOMMAND>\n\n"
+            "Subcommands:\n"
+            "  stats      Show cache size, entry count, and hit rate\n"
+            "  clear      Remove all cached objects\n\n"
+            "Options:\n"
+            "  -h, --help             Print help information\n\n"
+            "Examples:\n"
+            "  cdo cache stats        Show cache statistics\n"
+            "  cdo cache clear        Clear all cached objects\n"
+        );
+        break;
+    case CDO_CMD_FMT:
+        fprintf(out,
+            "Format source files\n\n"
+            "Usage: cdo fmt [OPTIONS] [CRATE...]\n\n"
+            "Arguments:\n"
+            "  [CRATE...]  Crates to format (default: all)\n\n"
+            "Options:\n"
+            "      --check            Check formatting without modifying files (exit 1 if non-conformant)\n"
+            "  -v, --verbose          Enable verbose output (log skipped files)\n"
+            "  -q, --quiet            Suppress all output except errors\n"
+            "  -h, --help             Print help information\n\n"
+            "Examples:\n"
+            "  cdo fmt                Format all source files in the workspace\n"
+            "  cdo fmt my-lib         Format only the 'my-lib' crate\n"
+            "  cdo fmt --check        Verify formatting without changes (CI mode)\n"
+            "  cdo fmt --check my-lib Check formatting for a specific crate\n"
         );
         break;
     }

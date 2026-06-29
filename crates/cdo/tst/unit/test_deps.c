@@ -1,7 +1,7 @@
 // crates/cdo_pbt/src/unit/test_deps.c
 // Unit tests for Deps module: metadata detection and lock file read/write
 #include "cdo_ut.h"
-#include "core/deps.h"
+#include "model/deps.h"
 #include "pal/pal.h"
 
 // --- Helper: unique temp dir base ---

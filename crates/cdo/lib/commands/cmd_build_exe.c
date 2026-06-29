@@ -1,7 +1,7 @@
 #include "cmd_build_internal.h"
 #include "core/compiler.h"
-#include "core/scanner.h"
-#include "core/module.h"
+#include "model/scanner.h"
+#include "model/module.h"
 #include "core/output.h"
 #include "pal/pal.h"
 
@@ -41,6 +41,9 @@ int build_executable_module(const Workspace* ws, Crate* crate,
                             int jobs,
                             const char** coverage_flags,
                             int coverage_flag_count,
+                            const CacheConfig* cache_config,
+                            CacheStats* cache_stats,
+                            bool no_cache,
                             ProgressBar* progress,
                             int* completed_units) {
     Module* exe_mod = &crate->modules[MODULE_EXE];
@@ -280,7 +283,7 @@ int build_executable_module(const Workspace* ws, Crate* crate,
         }
 
         // Execute compilation batch
-        rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs);
+        rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs, cache_config, cache_stats, no_cache);
 
         for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
         free(obj_paths);

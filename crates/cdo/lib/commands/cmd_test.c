@@ -4,9 +4,11 @@
 #include "commands/test_protocol.h"
 #include "commands/test_renderer.h"
 #include "commands/test_coverage.h"
-#include "core/module.h"
+#include "model/hooks.h"
+#include "core/hooks_exec.h"
+#include "model/module.h"
 #include "core/output.h"
-#include "core/workspace.h"
+#include "model/workspace.h"
 #include "pal/pal.h"
 #include <string.h>
 #include <stdio.h>
@@ -94,6 +96,25 @@ int cmd_test(const CdoOptions* opts) {
 #else
     setenv("CDO_BUILD_LOCK_HELD", "1", 1);
 #endif
+
+    // --- Workspace pre-test hook ---
+    {
+        const char* profile = opts->release ? "release" :
+                              (opts->profile && opts->profile[0]) ? opts->profile : "debug";
+        HookEnv ws_hook_env = {0};
+        ws_hook_env.ws_root = ws.root_path;
+        ws_hook_env.profile = profile;
+        char ws_build_dir[260];
+        snprintf(ws_build_dir, sizeof(ws_build_dir), "%s/build/%s", ws.root_path, profile);
+        ws_hook_env.build_dir = ws_build_dir;
+
+        if (hook_execute(&ws.ws_hooks.hooks[HOOK_PRE_TEST], &ws_hook_env) != 0) {
+            cdo_error("Workspace pre-test hook failed, aborting test run");
+            build_lock_release(lock);
+            workspace_free(&ws);
+            return 1;
+        }
+    }
 
     // Aggregate totals across all crates
     int total_total = 0, total_passed = 0, total_failed = 0, total_skipped = 0;
@@ -197,6 +218,30 @@ int cmd_test(const CdoOptions* opts) {
         }
 
         PalSpawnResult spawn_result = {0};
+
+        // --- Crate pre-test hook ---
+        {
+            char crate_abs[260];
+            pal_path_join(crate_abs, sizeof(crate_abs), ws.root_path, crate->path);
+            char crate_build[260];
+            snprintf(crate_build, sizeof(crate_build), "%s/build/%s/%s", ws.root_path, profile, crate->name);
+
+            HookEnv crate_env = {0};
+            crate_env.ws_root = ws.root_path;
+            crate_env.profile = profile;
+            char build_dir_buf[260];
+            snprintf(build_dir_buf, sizeof(build_dir_buf), "%s/build/%s", ws.root_path, profile);
+            crate_env.build_dir = build_dir_buf;
+            crate_env.crate_name = crate->name;
+            crate_env.crate_path = crate_abs;
+            crate_env.crate_build_dir = crate_build;
+
+            if (hook_execute(&crate->hooks.hooks[HOOK_PRE_TEST], &crate_env) != 0) {
+                cdo_error("Crate '%s' pre-test hook failed, skipping tests", crate->name);
+                crates_infra_error++;
+                continue;
+            }
+        }
 
         if (opts->list) {
             cdo_info("Tests in '%s':", crate->name);
@@ -322,6 +367,44 @@ int cmd_test(const CdoOptions* opts) {
         }
 
         pal_spawn_result_free(&spawn_result);
+
+        // --- Crate post-test hook ---
+        {
+            char crate_abs[260];
+            pal_path_join(crate_abs, sizeof(crate_abs), ws.root_path, crate->path);
+            char crate_build[260];
+            snprintf(crate_build, sizeof(crate_build), "%s/build/%s/%s", ws.root_path, profile, crate->name);
+
+            HookEnv crate_env = {0};
+            crate_env.ws_root = ws.root_path;
+            crate_env.profile = profile;
+            char build_dir_buf[260];
+            snprintf(build_dir_buf, sizeof(build_dir_buf), "%s/build/%s", ws.root_path, profile);
+            crate_env.build_dir = build_dir_buf;
+            crate_env.crate_name = crate->name;
+            crate_env.crate_path = crate_abs;
+            crate_env.crate_build_dir = crate_build;
+
+            if (hook_execute(&crate->hooks.hooks[HOOK_POST_TEST], &crate_env) != 0) {
+                cdo_warn("Crate '%s' post-test hook failed (test results unaffected)", crate->name);
+            }
+        }
+    }
+
+    // --- Workspace post-test hook ---
+    {
+        const char* profile = opts->release ? "release" :
+                              (opts->profile && opts->profile[0]) ? opts->profile : "debug";
+        HookEnv ws_hook_env = {0};
+        ws_hook_env.ws_root = ws.root_path;
+        ws_hook_env.profile = profile;
+        char ws_build_dir[260];
+        snprintf(ws_build_dir, sizeof(ws_build_dir), "%s/build/%s", ws.root_path, profile);
+        ws_hook_env.build_dir = ws_build_dir;
+
+        if (hook_execute(&ws.ws_hooks.hooks[HOOK_POST_TEST], &ws_hook_env) != 0) {
+            cdo_warn("Workspace post-test hook failed");
+        }
     }
 
     // Final summary (skip for --list mode)

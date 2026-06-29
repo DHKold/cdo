@@ -1,6 +1,6 @@
 #include "compiler_internal.h"
 #include "core/compiler.h"
-#include "core/scanner.h"
+#include "model/scanner.h"
 #include "pal/pal.h"
 #include "core/output.h"
 

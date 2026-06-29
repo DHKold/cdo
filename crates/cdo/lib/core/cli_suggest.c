@@ -17,7 +17,10 @@ static const CommandEntry command_table[] = {
     { "tool",    CDO_CMD_TOOL    },
     { "doctor",  CDO_CMD_DOCTOR  },
     { "deps",    CDO_CMD_DEPS    },
+    { "fmt",     CDO_CMD_FMT     },
     { "catalog", CDO_CMD_CATALOG },
+    { "cache",   CDO_CMD_CACHE   },
+    { "hook",    CDO_CMD_HOOK    },
     { "help",    CDO_CMD_HELP    },
 };
 

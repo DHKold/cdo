@@ -1,5 +1,5 @@
-#ifndef CDO_CORE_DEPS_H
-#define CDO_CORE_DEPS_H
+#ifndef CDO_MODEL_DEPS_H
+#define CDO_MODEL_DEPS_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,4 +105,4 @@ DepMetadataKind dep_detect_metadata(const char* dep_path);
 }
 #endif
 
-#endif /* CDO_CORE_DEPS_H */
+#endif /* CDO_MODEL_DEPS_H */

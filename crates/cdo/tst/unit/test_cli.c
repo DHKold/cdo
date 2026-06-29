@@ -52,6 +52,26 @@ TEST(cli_parse_coverage) {
     return 0;
 }
 
+TEST(cli_parse_cache_flag) {
+    char* argv[] = {"cdo", "clean", "--cache"};
+    CdoOptions opts = {0};
+    int rc = cdo_cli_parse(3, argv, &opts);
+    TEST_ASSERT_EQ(rc, 0);
+    TEST_ASSERT_EQ(opts.command, CDO_CMD_CLEAN);
+    TEST_ASSERT(opts.cache == true);
+    return 0;
+}
+
+TEST(cli_parse_clean_without_cache_flag) {
+    char* argv[] = {"cdo", "clean"};
+    CdoOptions opts = {0};
+    int rc = cdo_cli_parse(2, argv, &opts);
+    TEST_ASSERT_EQ(rc, 0);
+    TEST_ASSERT_EQ(opts.command, CDO_CMD_CLEAN);
+    TEST_ASSERT(opts.cache == false);
+    return 0;
+}
+
 // --- cdo_cli_suggest ---
 
 TEST(cli_suggest_typo) {

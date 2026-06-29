@@ -1,7 +1,7 @@
-#ifndef CDO_CORE_WORKSPACE_INTERNAL_H
-#define CDO_CORE_WORKSPACE_INTERNAL_H
+#ifndef CDO_MODEL_WORKSPACE_INTERNAL_H
+#define CDO_MODEL_WORKSPACE_INTERNAL_H
 
-#include "core/workspace.h"
+#include "model/workspace.h"
 #include <stddef.h>
 
 /// Try to read a config file with fallback order: .toml, .yaml, .json.
@@ -22,4 +22,4 @@ int dfs_find_cycle(const Workspace* ws, int node, int* color,
 /// Compute transitive closure of dependencies for crates marked in `included`.
 void compute_transitive_closure(const Workspace* ws, bool* included);
 
-#endif // CDO_CORE_WORKSPACE_INTERNAL_H
+#endif // CDO_MODEL_WORKSPACE_INTERNAL_H

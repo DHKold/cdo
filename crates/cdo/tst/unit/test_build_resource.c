@@ -3,8 +3,8 @@
 // Validates: Requirements 1.4, 1.5, 1.6, 1.7, 1.8, 1.9
 #include "cdo_ut.h"
 #include "commands/cmd_build_internal.h"
-#include "core/workspace.h"
-#include "core/module.h"
+#include "model/workspace.h"
+#include "model/module.h"
 #include "pal/pal.h"
 
 #include <stdio.h>

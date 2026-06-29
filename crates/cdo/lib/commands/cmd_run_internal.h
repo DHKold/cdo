@@ -2,7 +2,7 @@
 #define CDO_CMD_RUN_INTERNAL_H
 
 #include "commands/cmd_run.h"
-#include "core/workspace.h"
+#include "model/workspace.h"
 #include "core/cli.h"
 #include "pal/pal.h"
 

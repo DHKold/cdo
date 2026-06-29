@@ -2,8 +2,9 @@
 #define CDO_CMD_BUILD_INTERNAL_H
 
 #include "commands/cmd_build.h"
-#include "core/workspace.h"
+#include "model/workspace.h"
 #include "core/compiler.h"
+#include "core/cache.h"
 #include "core/output.h"
 #include "core/cli.h"
 #include "pal/pal.h"
@@ -91,6 +92,9 @@ typedef struct {
     int                jobs;
     const char**       coverage_flags;
     int                coverage_flag_count;
+    const CacheConfig* cache_config;
+    CacheStats*        cache_stats;
+    bool               no_cache;
     ProgressBar*       progress;
     int*               completed_units;
     const char*        crate_full_path;
@@ -119,6 +123,9 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
                                 int jobs,
                                 const char** coverage_flags,
                                 int coverage_flag_count,
+                                const CacheConfig* cache_config,
+                                CacheStats* cache_stats,
+                                bool no_cache,
                                 ProgressBar* progress,
                                 int* completed_units);
 
@@ -130,6 +137,9 @@ int build_library_module(const Workspace* ws, Crate* crate,
                          int jobs,
                          const char** coverage_flags,
                          int coverage_flag_count,
+                         const CacheConfig* cache_config,
+                         CacheStats* cache_stats,
+                         bool no_cache,
                          ProgressBar* progress,
                          int* completed_units);
 
@@ -141,6 +151,9 @@ int build_executable_module(const Workspace* ws, Crate* crate,
                             int jobs,
                             const char** coverage_flags,
                             int coverage_flag_count,
+                            const CacheConfig* cache_config,
+                            CacheStats* cache_stats,
+                            bool no_cache,
                             ProgressBar* progress,
                             int* completed_units);
 
@@ -152,6 +165,9 @@ int build_test_module(const Workspace* ws, Crate* crate,
                       int jobs,
                       const char** coverage_flags,
                       int coverage_flag_count,
+                      const CacheConfig* cache_config,
+                      CacheStats* cache_stats,
+                      bool no_cache,
                       ProgressBar* progress,
                       int* completed_units);
 

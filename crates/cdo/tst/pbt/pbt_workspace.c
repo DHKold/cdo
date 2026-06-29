@@ -7,7 +7,7 @@
  */
 #include "cdo_ut.h"
 #include "vendor/theft.h"
-#include "core/workspace.h"
+#include "model/workspace.h"
 
 #ifndef CDO_ERR_CYCLE
 #define CDO_ERR_CYCLE 8

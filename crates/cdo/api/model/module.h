@@ -1,5 +1,5 @@
-#ifndef CDO_CORE_MODULE_H
-#define CDO_CORE_MODULE_H
+#ifndef CDO_MODEL_MODULE_H
+#define CDO_MODEL_MODULE_H
 
 #include <stdbool.h>
 #include "scanner.h"
@@ -81,4 +81,4 @@ int module_include_paths(const Crate* crate, ModuleKind kind,
 }
 #endif
 
-#endif // CDO_CORE_MODULE_H
+#endif // CDO_MODEL_MODULE_H

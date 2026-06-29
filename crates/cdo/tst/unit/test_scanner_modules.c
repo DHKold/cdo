@@ -2,8 +2,8 @@
 // Unit tests for scanner_scan_modules detecting res/ and shd/ module directories.
 // Validates: Requirements 1.1, 1.2, 4.1, 4.2
 #include "cdo_ut.h"
-#include "core/scanner.h"
-#include "core/workspace.h"
+#include "model/scanner.h"
+#include "model/workspace.h"
 #include "pal/pal.h"
 
 #include <string.h>

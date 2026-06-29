@@ -1,5 +1,5 @@
-#ifndef CDO_SCANNER_H
-#define CDO_SCANNER_H
+#ifndef CDO_MODEL_SCANNER_H
+#define CDO_MODEL_SCANNER_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -79,4 +79,4 @@ void filelist_free(FileList* fl);
 }
 #endif
 
-#endif // CDO_SCANNER_H
+#endif // CDO_MODEL_SCANNER_H

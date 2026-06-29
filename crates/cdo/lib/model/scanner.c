@@ -1,5 +1,5 @@
-#include "core/scanner.h"
-#include "core/workspace.h"
+#include "model/scanner.h"
+#include "model/workspace.h"
 #include "pal/pal.h"
 
 #include <stdlib.h>

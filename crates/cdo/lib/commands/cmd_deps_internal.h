@@ -4,7 +4,7 @@
 #include "commands/cmd_deps.h"
 #include "core/catalog.h"
 #include "core/cli.h"
-#include "core/deps.h"
+#include "model/deps.h"
 #include "commons/toml.h"
 
 #include <stdbool.h>

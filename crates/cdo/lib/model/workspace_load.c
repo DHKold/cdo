@@ -1,8 +1,9 @@
 #include "workspace_internal.h"
-#include "core/workspace.h"
-#include "core/scanner.h"
+#include "model/workspace.h"
+#include "model/scanner.h"
+#include "model/hooks.h"
 #include "commons/toml.h"
-#include "core/output.h"
+#include "commons/output.h"
 #include "pal/pal.h"
 
 #include <stdbool.h>
@@ -13,6 +14,35 @@
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+/// Parse a size string with suffix (KB, MB, GB) into bytes.
+/// Supports case-insensitive suffixes. Returns bytes on success, -1 on invalid input.
+/// Examples: "2GB" → 2147483648, "500MB" → 524288000, "100KB" → 102400
+static int64_t parse_size_string(const char* size_str) {
+    if (!size_str || !*size_str) return -1;
+
+    char* end = NULL;
+    double value = strtod(size_str, &end);
+    if (end == size_str || value < 0) return -1;
+
+    // Skip whitespace between number and suffix
+    while (*end == ' ') end++;
+
+    int64_t multiplier = 1;
+    if ((*end == 'G' || *end == 'g') && (*(end + 1) == 'B' || *(end + 1) == 'b')) {
+        multiplier = (int64_t)1024 * 1024 * 1024;
+    } else if ((*end == 'M' || *end == 'm') && (*(end + 1) == 'B' || *(end + 1) == 'b')) {
+        multiplier = (int64_t)1024 * 1024;
+    } else if ((*end == 'K' || *end == 'k') && (*(end + 1) == 'B' || *(end + 1) == 'b')) {
+        multiplier = (int64_t)1024;
+    } else if (*end == '\0') {
+        multiplier = 1; // Plain bytes if no suffix
+    } else {
+        return -1; // Unknown suffix
+    }
+
+    return (int64_t)(value * (double)multiplier);
+}
 
 /// Try to read a config file with fallback order: .toml, .yaml, .json
 /// Returns 0 on success with buf/len populated. Caller frees buf.
@@ -339,6 +369,18 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
         }
     }
 
+    // Parse [hooks] section for crate lifecycle hooks
+    const TomlValue* hooks_val = toml_get(root, "hooks");
+    if (hooks_val && (hooks_val->type == TOML_TABLE || hooks_val->type == TOML_INLINE_TABLE)) {
+        if (hooks_parse_table(hooks_val->as.table, &crate->hooks) != 0) {
+            cdo_error("Failed to parse [hooks] in crate '%s'", crate->name);
+            toml_free(root);
+            return -1;
+        }
+    } else {
+        memset(&crate->hooks, 0, sizeof(HookSet));
+    }
+
     toml_free(root);
     return 0;
 }
@@ -398,6 +440,83 @@ int workspace_load(const char* root_path, Workspace* ws) {
     const TomlValue* cpp_std_val = toml_get(root, "workspace.settings.cpp-standard");
     if (cpp_std_val && cpp_std_val->type == TOML_INTEGER) {
         default_cpp_std = (int)cpp_std_val->as.integer;
+    }
+
+    // Parse [workspace.settings.cache] section with defaults
+    ws->cache_config.enabled = true;
+    strncpy(ws->cache_config.path, ".cdo/cache/objects", sizeof(ws->cache_config.path) - 1);
+    ws->cache_config.path[sizeof(ws->cache_config.path) - 1] = '\0';
+    ws->cache_config.max_size_bytes = (int64_t)2 * 1024 * 1024 * 1024; // 2GB
+    strncpy(ws->cache_config.backend, "builtin", sizeof(ws->cache_config.backend) - 1);
+    ws->cache_config.backend[sizeof(ws->cache_config.backend) - 1] = '\0';
+
+    const TomlValue* cache_enabled_val = toml_get(root, "workspace.settings.cache.enabled");
+    if (cache_enabled_val && cache_enabled_val->type == TOML_BOOL) {
+        ws->cache_config.enabled = cache_enabled_val->as.boolean;
+    }
+
+    const TomlValue* cache_path_val = toml_get(root, "workspace.settings.cache.path");
+    if (cache_path_val && cache_path_val->type == TOML_STRING && cache_path_val->as.string) {
+        strncpy(ws->cache_config.path, cache_path_val->as.string, sizeof(ws->cache_config.path) - 1);
+        ws->cache_config.path[sizeof(ws->cache_config.path) - 1] = '\0';
+    }
+
+    const TomlValue* cache_size_val = toml_get(root, "workspace.settings.cache.max-size");
+    if (cache_size_val && cache_size_val->type == TOML_STRING && cache_size_val->as.string) {
+        int64_t parsed_size = parse_size_string(cache_size_val->as.string);
+        if (parsed_size > 0) {
+            ws->cache_config.max_size_bytes = parsed_size;
+        } else {
+            cdo_warn("Invalid cache max-size '%s', using default 2GB", cache_size_val->as.string);
+        }
+    }
+
+    const TomlValue* cache_backend_val = toml_get(root, "workspace.settings.cache.backend");
+    if (cache_backend_val && cache_backend_val->type == TOML_STRING && cache_backend_val->as.string) {
+        strncpy(ws->cache_config.backend, cache_backend_val->as.string, sizeof(ws->cache_config.backend) - 1);
+        ws->cache_config.backend[sizeof(ws->cache_config.backend) - 1] = '\0';
+    }
+
+    // Parse [workspace.settings.format] section with defaults
+    memset(&ws->format_settings, 0, sizeof(FmtSettings));
+
+    const TomlValue* fmt_tool_path_val = toml_get(root, "workspace.settings.format.tool-path");
+    if (fmt_tool_path_val && fmt_tool_path_val->type == TOML_STRING && fmt_tool_path_val->as.string) {
+        strncpy(ws->format_settings.tool_path, fmt_tool_path_val->as.string, sizeof(ws->format_settings.tool_path) - 1);
+        ws->format_settings.tool_path[sizeof(ws->format_settings.tool_path) - 1] = '\0';
+    }
+
+    const TomlValue* fmt_style_val = toml_get(root, "workspace.settings.format.style");
+    if (fmt_style_val && fmt_style_val->type == TOML_STRING && fmt_style_val->as.string) {
+        strncpy(ws->format_settings.style, fmt_style_val->as.string, sizeof(ws->format_settings.style) - 1);
+        ws->format_settings.style[sizeof(ws->format_settings.style) - 1] = '\0';
+    }
+
+    const TomlValue* fmt_exclude_val = toml_get(root, "workspace.settings.format.exclude");
+    if (fmt_exclude_val && fmt_exclude_val->type == TOML_ARRAY && fmt_exclude_val->as.array) {
+        TomlArray* exclude_arr = fmt_exclude_val->as.array;
+        int count = exclude_arr->count;
+        if (count > 32) count = 32;
+        for (int i = 0; i < count; i++) {
+            TomlValue* item = exclude_arr->items[i];
+            if (item && item->type == TOML_STRING && item->as.string) {
+                strncpy(ws->format_settings.exclude_patterns[ws->format_settings.exclude_count], item->as.string, 259);
+                ws->format_settings.exclude_patterns[ws->format_settings.exclude_count][259] = '\0';
+                ws->format_settings.exclude_count++;
+            }
+        }
+    }
+
+    // Parse [workspace.hooks] section
+    const TomlValue* ws_hooks_val = toml_get(root, "workspace.hooks");
+    if (ws_hooks_val && (ws_hooks_val->type == TOML_TABLE || ws_hooks_val->type == TOML_INLINE_TABLE)) {
+        if (hooks_parse_table(ws_hooks_val->as.table, &ws->ws_hooks) != 0) {
+            cdo_error("Failed to parse [workspace.hooks]");
+            toml_free(root);
+            return -1;
+        }
+    } else {
+        memset(&ws->ws_hooks, 0, sizeof(HookSet));
     }
 
     // Extract members array

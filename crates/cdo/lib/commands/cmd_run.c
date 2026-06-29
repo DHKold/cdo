@@ -2,8 +2,8 @@
 #include "commands/cmd_run_internal.h"
 #include "commands/cmd_build.h"
 #include "core/output.h"
-#include "core/workspace.h"
-#include "core/module.h"
+#include "model/workspace.h"
+#include "model/module.h"
 #include "pal/pal.h"
 #include <string.h>
 #include <stdlib.h>

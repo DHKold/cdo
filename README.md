@@ -66,7 +66,7 @@ cdo run
 
 ### build
 
-Compile the workspace or a specific crate.
+Compile the workspace or a specific crate. CDo compiles multiple crates in parallel using a dependency-aware task DAG, overlapping compilation of downstream crates with linking of upstream crates.
 
 ```sh
 cdo build              # Build all crates (default: debug profile)
@@ -74,7 +74,11 @@ cdo build my-crate     # Build a specific crate
 cdo build --release    # Build with the release profile
 cdo build -r           # Short form for --release
 cdo build --verbose    # Show detailed compiler invocations
+cdo build -j 4         # Use 4 parallel jobs
+cdo build --jobs 1     # Sequential mode (one crate at a time)
 ```
+
+The `-j` / `--jobs` flag controls how many compilation tasks run concurrently. By default, CDo uses the number of available CPU cores. Use `--jobs 1` to force sequential crate-by-crate compilation.
 
 ### run
 
@@ -336,6 +340,26 @@ cdo build                      # Default: 30 seconds
 ### Diagnostics
 
 The lock file (`.cdo/build.lock`) contains the PID and timestamp of the process holding the lock. If a build times out, CDo reports which process holds the lock to help you diagnose the issue.
+
+## Parallel Multi-Crate Compilation
+
+CDo uses a fine-grained dependency graph (DAG) to maximize build parallelism across crates. Instead of building one crate at a time, CDo:
+
+- Starts compiling downstream crates as soon as upstream headers are available
+- Only waits for upstream linking when a downstream crate's own link step needs the `.lib`/`.a` artifact
+- Dispatches compile tasks across all available CPU cores
+
+This means in a workspace with multiple crates, compilation of independent source files proceeds in parallel even across crate boundaries, reducing wall-clock build times on multi-core machines.
+
+### Controlling Parallelism
+
+```sh
+cdo build              # Default: uses all CPU cores
+cdo build -j 4         # Limit to 4 concurrent compile tasks
+cdo build --jobs 1     # Sequential mode (matches pre-DAG behavior)
+```
+
+When a compilation error occurs, CDo cancels all dependent tasks and reports which crate and module failed, along with how many downstream tasks were skipped.
 
 ## Contributing
 

@@ -1,5 +1,5 @@
-#include "core/module.h"
-#include "core/workspace.h"
+#include "model/module.h"
+#include "model/workspace.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -205,27 +205,6 @@ int module_include_paths(const Crate* crate, ModuleKind kind,
         for (int di = 0; di < dir_count; di++) {
             const char* parent_dir = dirs_to_scan[di];
 
-            // Use pal_dir_walk to find immediate subdirectories
-            // We collect them via a simple callback structure
-            typedef struct {
-                char** result;
-                int* n;
-                int* max_paths;
-                const char* parent;
-                size_t parent_len;
-                int error;
-            } SubdirCtx;
-
-            // Can't use pal_dir_walk inline with a local struct easily in C89/C11.
-            // Instead, enumerate using Windows FindFirstFile / POSIX opendir.
-            // Use a simpler approach: manually check for known subdirectory names
-            // by walking with pal_dir_walk and filtering for direct children.
-            //
-            // Actually, the simplest correct approach: use pal_dir_walk and pick
-            // entries that are directories AND are direct children (depth 1).
-            // We detect depth 1 by checking that the path after parent_dir has
-            // no additional separators.
-
             size_t plen = strlen(parent_dir);
             // Normalize trailing slash
             char norm_parent[260];
@@ -240,10 +219,8 @@ int module_include_paths(const Crate* crate, ModuleKind kind,
                 }
             }
 
-            // Walk and collect direct child directories
-            // Since pal_dir_walk is recursive and uses a callback, we need a static/heap context.
-            // For simplicity and to avoid complex callback machinery, use a platform-specific
-            // approach to list just the immediate children.
+            (void)plen;
+
 #ifdef _WIN32
             {
                 char pattern[260];

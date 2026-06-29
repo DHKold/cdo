@@ -9,7 +9,7 @@
  */
 #include "cdo_ut.h"
 #include "vendor/theft.h"
-#include "core/scanner.h"
+#include "model/scanner.h"
 #include "pal/pal.h"
 
 /* Structure representing a generated temp directory tree for testing */

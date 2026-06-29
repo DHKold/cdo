@@ -5,5 +5,10 @@ build/
 .cdo/
 
 # temporary and demo
-e2e/
 *.gcov
+cdo_temp.exe
+
+# e2e workspace build artifacts and tools (source files tracked)
+e2e/
+e2e/**/build/
+e2e/**/.cdo/

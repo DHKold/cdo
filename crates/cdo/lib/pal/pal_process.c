@@ -407,7 +407,16 @@ int pal_spawn(const PalSpawnOpts* opts, PalSpawnResult* result) {
         }
     }
 
-    char* cmd_line = build_command_line(opts->program, opts->args, opts->arg_count);
+    // If raw_cmdline is provided, use it directly (bypasses argument quoting).
+    // This is needed for cmd /c where the command portion must not be quoted.
+    char* cmd_line = NULL;
+    if (opts->raw_cmdline) {
+        size_t len = strlen(opts->raw_cmdline);
+        cmd_line = (char*)malloc(len + 1);
+        if (cmd_line) memcpy(cmd_line, opts->raw_cmdline, len + 1);
+    } else {
+        cmd_line = build_command_line(opts->program, opts->args, opts->arg_count);
+    }
     if (!cmd_line) {
         if (opts->capture_output) {
             CloseHandle(stdout_read);

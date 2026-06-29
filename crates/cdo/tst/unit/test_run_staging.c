@@ -3,8 +3,8 @@
 // Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11, 3.12, 3.13
 #include "cdo_ut.h"
 #include "commands/cmd_run_internal.h"
-#include "core/workspace.h"
-#include "core/module.h"
+#include "model/workspace.h"
+#include "model/module.h"
 #include "core/cli.h"
 #include "pal/pal.h"
 

@@ -1,7 +1,7 @@
 // crates/cdo_pbt/src/unit/test_workspace.c
 // Unit tests for workspace loading and build order resolution
 #include "cdo_ut.h"
-#include "core/workspace.h"
+#include "model/workspace.h"
 
 // --- workspace_load ---
 

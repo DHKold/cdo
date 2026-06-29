@@ -22,6 +22,9 @@ typedef enum {
     CDO_CMD_DOCTOR,
     CDO_CMD_CATALOG,
     CDO_CMD_DEPS,
+    CDO_CMD_CACHE,
+    CDO_CMD_HOOK,
+    CDO_CMD_FMT,
     CDO_CMD_HELP,
     CDO_CMD_UNKNOWN,
 } CdoCommand;
@@ -41,6 +44,9 @@ typedef struct {
     bool            filter_tools;       // --tools flag (catalog list filter)
     bool            filter_packages;    // --packages flag (catalog list filter)
     bool            venv;               // --venv flag (init: create virtual environment)
+    bool            no_cache;           // --no-cache flag (build: disable cache lookup and population)
+    bool            cache;              // --cache flag (clean: also clear build cache)
+    bool            check;              // --check flag (fmt: dry-run mode, report non-conformant files)
     const char*     profile;
     const char*     filter;             // --filter <pattern> (test: filter pattern)
     const char*     version_constraint; // --version <constraint>

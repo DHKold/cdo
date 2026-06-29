@@ -1,7 +1,7 @@
 #include "cmd_build_internal.h"
 #include "core/compiler.h"
-#include "core/scanner.h"
-#include "core/module.h"
+#include "model/scanner.h"
+#include "model/module.h"
 #include "core/output.h"
 #include "pal/pal.h"
 
@@ -38,6 +38,9 @@ int build_test_module(const Workspace* ws, Crate* crate,
                       int jobs,
                       const char** coverage_flags,
                       int coverage_flag_count,
+                      const CacheConfig* cache_config,
+                      CacheStats* cache_stats,
+                      bool no_cache,
                       ProgressBar* progress,
                       int* completed_units) {
     if (!crate->modules[MODULE_TST].present) return 0; // Nothing to do
@@ -284,7 +287,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
         }
 
         // Execute compilation batch
-        rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs);
+        rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs, cache_config, cache_stats, no_cache);
 
         for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
         free(obj_paths);

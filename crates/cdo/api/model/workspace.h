@@ -1,9 +1,12 @@
-#ifndef CDO_CORE_WORKSPACE_H
-#define CDO_CORE_WORKSPACE_H
+#ifndef CDO_MODEL_WORKSPACE_H
+#define CDO_MODEL_WORKSPACE_H
 
 #include <stdbool.h>
 #include <stddef.h>
-#include "module.h"
+#include "model/module.h"
+#include "model/cache_config.h"
+#include "model/fmt_settings.h"
+#include "model/hooks.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,6 +45,9 @@ typedef struct Crate {
     int             link_lib_count;
     char**          defines;        // crate-level defines from [build].defines
     int             define_count;
+
+    // Lifecycle hooks
+    HookSet         hooks;          // crate-level lifecycle hooks (parsed from [hooks])
 } Crate;
 
 // --- Workspace ---
@@ -51,6 +57,9 @@ typedef struct Workspace {
     Crate*          crates;
     int*            build_order;    // indices into crates[]
     int             build_order_count;
+    CacheConfig     cache_config;   // Build cache configuration (parsed from [workspace.settings.cache])
+    FmtSettings     format_settings; // Format settings (parsed from [workspace.settings.format])
+    HookSet         ws_hooks;       // Workspace-level lifecycle hooks (parsed from [workspace.hooks])
 } Workspace;
 
 /// Load workspace from cdo.toml (or cdo.yaml / cdo.json fallback) at the
@@ -77,4 +86,4 @@ void workspace_free(Workspace* ws);
 }
 #endif
 
-#endif // CDO_CORE_WORKSPACE_H
+#endif // CDO_MODEL_WORKSPACE_H

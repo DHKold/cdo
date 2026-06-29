@@ -1,7 +1,7 @@
 #include "workspace_internal.h"
-#include "core/workspace.h"
+#include "model/workspace.h"
 #include "commons/toml.h"
-#include "core/output.h"
+#include "commons/output.h"
 #include "pal/pal.h"
 
 #include <stdbool.h>

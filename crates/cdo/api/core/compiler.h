@@ -1,7 +1,8 @@
 #ifndef CDO_CORE_COMPILER_H
 #define CDO_CORE_COMPILER_H
 
-#include "core/workspace.h"
+#include "model/workspace.h"
+#include "core/cache.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -86,9 +87,20 @@ int compiler_compute_dirty_set(const BuildUnit* units, int unit_count,
 /// Execute a batch of compile jobs in parallel via thread pool.
 /// Generates compiler command lines based on the compiler family and dispatches
 /// compilation jobs to the thread pool for parallel execution.
+///
+/// If cache_config is non-NULL, cache_config->enabled is true, and no_cache is false,
+/// the function will attempt cache lookups before compiling each job:
+///   - On cache hit: copies the cached .o to the object path and increments cache_stats->hits
+///   - On cache miss: compiles normally and increments cache_stats->misses
+///
+/// If cache_config is NULL, cache_config->enabled is false, or no_cache is true,
+/// all jobs are compiled normally (no caching).
+///
 /// Returns 0 if all compile jobs succeed, non-zero if any fail.
 int compiler_compile_batch(const CompileJob* jobs, int job_count,
-                           const CompilerInfo* info, int parallelism);
+                           const CompilerInfo* info, int parallelism,
+                           const CacheConfig* cache_config, CacheStats* cache_stats,
+                           bool no_cache);
 
 /// Link object files into final artifact (executable or library).
 /// Returns 0 on success, non-zero on failure.

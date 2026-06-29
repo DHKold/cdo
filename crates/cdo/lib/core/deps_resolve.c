@@ -1,4 +1,4 @@
-#include "core/deps.h"
+#include "model/deps.h"
 #include "core/output.h"
 #include "commons/http.h"
 #include "commons/archive.h"

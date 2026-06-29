@@ -25,6 +25,8 @@ typedef struct {
     const char*     cwd;        // NULL = inherit
     bool            capture_output;
     int             timeout_ms; // 0 = use default (120000ms), -1 = no timeout
+    const char*     raw_cmdline; // If non-NULL, used directly as lpCommandLine on Windows
+                                 // (bypasses build_command_line quoting). Ignored on POSIX.
 } PalSpawnOpts;
 
 typedef struct {

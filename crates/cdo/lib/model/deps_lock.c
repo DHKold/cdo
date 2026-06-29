@@ -1,5 +1,5 @@
-#include "core/deps.h"
-#include "core/output.h"
+#include "model/deps.h"
+#include "commons/output.h"
 #include "commons/toml.h"
 #include "pal/pal.h"
 

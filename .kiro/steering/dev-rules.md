@@ -6,6 +6,7 @@
 - Keep code concise but readable: meaningful comments, well-named functions, clear intent.
 - Organize files in small units: aim for <500 lines per file. Prefer small reusable functions composed together.
 - Use folders to organize related files, not name prefixes. Example: `commands/build/compile.c` rather than `commands/build_compile.c`.
+- Add extensive logging with the correct levels (Must be ascii characters only)
 
 ## Development Methodology
 

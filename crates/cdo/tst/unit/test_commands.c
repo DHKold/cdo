@@ -5,7 +5,7 @@
 #include "commands/cmd_deps.h"
 #include "commands/cmd_build.h"
 #include "core/cli.h"
-#include "core/workspace.h"
+#include "model/workspace.h"
 #include "core/output.h"
 
 // --- cmd_tool ---

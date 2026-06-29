@@ -1,6 +1,6 @@
 #include "cmd_build_internal.h"
 #include "core/compiler.h"
-#include "core/scanner.h"
+#include "model/scanner.h"
 #include "core/output.h"
 #include "pal/pal.h"
 
@@ -21,6 +21,9 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
     int jobs = ctx->jobs;
     const char** coverage_flags = ctx->coverage_flags;
     int coverage_flag_count = ctx->coverage_flag_count;
+    const CacheConfig* cache_config = ctx->cache_config;
+    CacheStats* cache_stats = ctx->cache_stats;
+    bool no_cache = ctx->no_cache;
     ProgressBar* progress = ctx->progress;
     int* completed_units = ctx->completed_units;
     const char* crate_full_path = ctx->crate_full_path;
@@ -215,7 +218,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
         return 1;
     }
 
-    rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs);
+    rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs, cache_config, cache_stats, no_cache);
     if (rc != 0) {
         cdo_error("compilation failed for crate '%s'", crate->name);
         for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
@@ -319,7 +322,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
                     dj++;
                 }
                 cdo_info("Compiling dep '%s' for test (%d files)", dep_crate->name, dj);
-                int dep_rc = compiler_compile_batch(dep_jobs, dj, compiler, jobs);
+                int dep_rc = compiler_compile_batch(dep_jobs, dj, compiler, jobs, cache_config, cache_stats, no_cache);
                 if (dep_rc != 0) {
                     cdo_error("failed to compile dep '%s' for test crate", dep_crate->name);
                     for (int x = 0; x < dj; x++) free(dep_obj_bufs[x]);

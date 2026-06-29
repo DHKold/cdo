@@ -1,6 +1,6 @@
 #include "cmd_build_internal.h"
 
-#include "core/module.h"
+#include "model/module.h"
 #include "core/output.h"
 #include "pal/pal.h"
 

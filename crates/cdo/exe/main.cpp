@@ -19,6 +19,9 @@ extern "C" {
 #include "commands/cmd_tool.h"
 #include "commands/cmd_doctor.h"
 #include "commands/cmd_catalog.h"
+#include "commands/cmd_cache.h"
+#include "commands/cmd_hook.h"
+#include "commands/cmd_fmt.h"
 }
 
 #include <cstdio>
@@ -40,6 +43,9 @@ static void print_usage(FILE* out) {
         "  init      Initialize a project in the current directory\n"
         "  deps      Manage dependencies (add, remove, list)\n"
         "  catalog   Browse and search the package/tool catalog\n"
+        "  cache     Manage the build cache (stats, clear)\n"
+        "  hook      List or manually run lifecycle hooks\n"
+        "  fmt       Format source files\n"
         "  tool      Manage local tool installations\n"
         "  doctor    Check environment health\n"
         "  shader    Compile HLSL shaders\n"
@@ -130,6 +136,12 @@ int main(int argc, char* argv[]) {
             return cmd_catalog(&opts);
         case CDO_CMD_DEPS:
             return cmd_deps(&opts);
+        case CDO_CMD_CACHE:
+            return cmd_cache(&opts);
+        case CDO_CMD_HOOK:
+            return cmd_hook(&opts);
+        case CDO_CMD_FMT:
+            return cmd_fmt(&opts);
         case CDO_CMD_HELP:
             cdo_cli_print_help(CDO_CMD_HELP, stdout);
             return 0;
@@ -148,7 +160,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 std::fprintf(stderr, "\nAvailable commands: build, run, test, clean, new, init, "
-                    "deps, tool, catalog, doctor, shader\n");
+                    "deps, cache, hook, fmt, tool, catalog, doctor, shader\n");
                 std::fprintf(stderr, "Run 'cdo --help' for full usage information.\n");
             } else {
                 print_usage(stdout);
