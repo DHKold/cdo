@@ -1,0 +1,6 @@
+[crate]
+name = "cdo_cli"
+c-standard = 17
+
+[dependencies]
+cdo_ut = {}
