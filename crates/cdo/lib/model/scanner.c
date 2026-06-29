@@ -507,8 +507,14 @@ int scanner_scan_modules(const char* crate_path, Crate* crate,
             // artifact_path left empty for now (computed during build)
             crate->modules[i].artifact_path[0] = '\0';
 
-            // Scan files for MODULE_RES and MODULE_SHD immediately
-            if (i == MODULE_RES) {
+            // Scan source files for compilable modules (lib, exe, dyn, tst)
+            if (i == MODULE_LIB || i == MODULE_EXE || i == MODULE_DYN || i == MODULE_TST) {
+                FileList fl = {0};
+                int scan_rc = scanner_scan_module_sources(dir_path, i, exclude_patterns, exclude_count, &fl);
+                if (scan_rc == 0) {
+                    crate->modules[i].sources = fl;
+                }
+            } else if (i == MODULE_RES) {
                 FileList fl;
                 if (filelist_init(&fl) != 0) return 1;
                 size_t dir_len = strlen(dir_path);

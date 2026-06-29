@@ -1,11 +1,11 @@
 [[tool]]
 name = "w64devkit"
-version = "2.0.0"
-description = "Portable C/C++ development kit for Windows"
+version = "1.23.0"
+description = "Portable C/C++ development kit for Windows (GCC 14.1)"
 
 [tool.platforms.windows-x86_64]
-url = "https://github.com/skeeto/w64devkit/releases/download/v2.0.0/w64devkit-2.0.0.zip"
-checksum = "sha256:71ba0de8fb3da37bcdcc18a80db20e61ee9685fef0a45a74f87ff94c3a34a1df"
+url = "https://github.com/skeeto/w64devkit/releases/download/v1.23.0/w64devkit-1.23.0.zip"
+checksum = ""
 
 [[tool]]
 name = "dxc"

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cdo", "crates/cdo_ut"]
+members = ["crates/cdo", "crates/cdo_ut", "crates/cdo_cli"]
 
 [workspace.settings]
 c-standard = 17

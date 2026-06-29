@@ -246,6 +246,15 @@ static int tool_install(const ToolArgs* args) {
     const char* url = args->url;
     const char* checksum_str = args->checksum;
 
+    // --- Check if tool is already installed (skip unless --refresh) ---
+    char tool_dir_check[MAX_PATH_LEN];
+    if (pal_path_join(tool_dir_check, sizeof(tool_dir_check), TOOLS_DIR, name) == 0) {
+        if (!args->refresh && pal_path_exists(tool_dir_check) == 0) {
+            cdo_info("Tool '%s' is already installed (use --refresh to re-install)", name);
+            return 0;
+        }
+    }
+
     // --- Catalog resolution: if no --url provided, resolve from catalog ---
     Catalog catalog = {0};
     CatalogResolveResult resolve_result = {0};
@@ -381,6 +390,8 @@ static int tool_install(const ToolArgs* args) {
     int rc2 = extract_archive(cache_path, tool_dir);
     if (rc2 != 0) {
         cdo_error("Failed to extract archive: %s", cache_path);
+        cdo_info("  hint: if on Windows, your antivirus may be blocking the file.");
+        cdo_info("  hint: try adding '.cdo/cache' to your antivirus exclusions.");
         if (used_catalog) { catalog_resolve_result_free(&resolve_result); catalog_free(&catalog); }
         return 1;
     }

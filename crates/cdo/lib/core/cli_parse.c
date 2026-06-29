@@ -228,7 +228,13 @@ int cdo_cli_parse(int argc, char** argv, CdoOptions* opts) {
                 }
                 continue;
             }
-            // Unrecognized option — skip (could be command-specific)
+            // Unrecognized option — after command is found, pass to command handler
+            // via positional args; before command, skip silently
+            if (command_found) {
+                if (positional_count < MAX_POSITIONAL) {
+                    positional_buf[positional_count++] = arg;
+                }
+            }
             continue;
         }
 
