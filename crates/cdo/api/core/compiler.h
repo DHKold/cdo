@@ -106,6 +106,12 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
 /// Returns 0 on success, non-zero on failure.
 int compiler_link(const LinkJob* job, const CompilerInfo* info);
 
+/// Check if a link artifact is up-to-date (all inputs older than output).
+/// inputs[] includes object files AND dependency library paths.
+/// Returns true if link can be skipped (all inputs older than output and output exists).
+/// Returns false if any input is newer, output is missing, or mtime cannot be determined.
+bool compiler_link_is_fresh(const char* output_path, const char** input_paths, int input_count);
+
 #ifdef __cplusplus
 }
 #endif

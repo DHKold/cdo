@@ -541,6 +541,48 @@ static int execute_link_task(DagTask* task, DagGraph* graph, const DagSchedulerC
     link_job.link_lib_count = link_lib_count;
     link_job.shared = (task->module_kind == MODULE_DYN);
 
+    // Artifact freshness check: gather all inputs (objects + dep lib artifacts)
+    {
+        int dep_lib_artifact_count = 0;
+        if (crate->has_lib && crate->modules[MODULE_LIB].artifact_path[0] != '\0' && task->module_kind != MODULE_LIB) {
+            dep_lib_artifact_count++;
+        }
+        for (int d = 0; d < crate->dep_count; d++) {
+            int dep_idx = crate->dep_indices[d];
+            if (dep_idx < 0 || dep_idx >= ws->crate_count) continue;
+            const Crate* dep_crate = &ws->crates[dep_idx];
+            if (dep_crate->has_lib && dep_crate->modules[MODULE_LIB].artifact_path[0] != '\0') dep_lib_artifact_count++;
+        }
+
+        int fresh_input_count = obj_count + dep_lib_artifact_count;
+        const char** fresh_inputs = (const char**)malloc(sizeof(const char*) * (size_t)(fresh_input_count > 0 ? fresh_input_count : 1));
+        if (fresh_inputs) {
+            int fi = 0;
+            for (int i = 0; i < obj_count; i++) fresh_inputs[fi++] = obj_paths[i];
+            if (crate->has_lib && crate->modules[MODULE_LIB].artifact_path[0] != '\0' && task->module_kind != MODULE_LIB) {
+                fresh_inputs[fi++] = crate->modules[MODULE_LIB].artifact_path;
+            }
+            for (int d = 0; d < crate->dep_count; d++) {
+                int dep_idx = crate->dep_indices[d];
+                if (dep_idx < 0 || dep_idx >= ws->crate_count) continue;
+                const Crate* dep_crate = &ws->crates[dep_idx];
+                if (dep_crate->has_lib && dep_crate->modules[MODULE_LIB].artifact_path[0] != '\0') {
+                    fresh_inputs[fi++] = dep_crate->modules[MODULE_LIB].artifact_path;
+                }
+            }
+
+            if (compiler_link_is_fresh(task->artifact_path, fresh_inputs, fi)) {
+                cdo_log_debug("artifact up-to-date, skipping link: %s", task->artifact_path);
+                free(fresh_inputs);
+                free(obj_paths);
+                free(lib_paths);
+                free(link_libs);
+                return 0;
+            }
+            free(fresh_inputs);
+        }
+    }
+
     cdo_log_info("Linking %s: %s", module_kind_to_string(task->module_kind), task->artifact_path);
     int rc = compiler_link(&link_job, config->compiler);
 

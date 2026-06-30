@@ -1,6 +1,8 @@
 #include "compiler_internal.h"
 #include "core/compiler.h"
 #include "core/cache.h"
+#include "core/cache_threshold.h"
+#include "core/cache_hash_parallel.h"
 #include "commons/threadpool.h"
 #include "pal/pal.h"
 #include "core/log.h"
@@ -11,8 +13,19 @@
 #include <ctype.h>
 
 // ---------------------------------------------------------------------------
-// compiler_compile_batch â€” generate commands and execute via thread pool
+// compiler_compile_batch -- generate commands and execute via thread pool
 // ---------------------------------------------------------------------------
+
+/// Get the size of a source file in bytes. Returns -1 on failure (unknown).
+static int64_t get_source_file_size(const char* path) {
+    if (!path) return -1;
+    FILE* f = fopen(path, "rb");
+    if (!f) return -1;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long size = ftell(f);
+    fclose(f);
+    return (size < 0) ? -1 : (int64_t)size;
+}
 
 // Maximum number of arguments we'll pass to the compiler
 #define MAX_COMPILE_ARGS 256
@@ -57,9 +70,6 @@ static int build_gcc_clang_args(const CompileJob* job, const CompilerInfo* info,
     // Include paths: -I<path>
     for (int i = 0; i < job->include_path_count; i++) {
         if (n >= max_args) return -1;
-        // We'll build a string "-I<path>" â€” use a static buffer pattern.
-        // Since pal_spawn copies the args, we need persistent memory.
-        // We'll use a simple approach: store the -I prefix inline.
         args[n++] = "-I";
         if (n >= max_args) return -1;
         args[n++] = job->include_paths[i];
@@ -292,12 +302,10 @@ static void compile_task(void* arg) {
         if (info->family == COMPILER_GCC) {
             size_t plen = strlen(info->path);
             if (plen >= 7 && strcmp(info->path + plen - 7, "gcc.exe") == 0) {
-                // "path/to/gcc.exe" -> "path/to/g++.exe"
                 snprintf(cpp_program, sizeof(cpp_program), "%s", info->path);
                 strcpy(cpp_program + plen - 7, "g++.exe");
                 compiler_program = cpp_program;
             } else if (plen >= 3 && strcmp(info->path + plen - 3, "gcc") == 0) {
-                // "gcc" or "path/to/gcc" -> "g++" or "path/to/g++"
                 snprintf(cpp_program, sizeof(cpp_program), "%s", info->path);
                 strcpy(cpp_program + plen - 3, "g++");
                 compiler_program = cpp_program;
@@ -324,7 +332,6 @@ static void compile_task(void* arg) {
 
     // External cache backend prefix mode: when an external backend (ccache/sccache)
     // is configured, prefix the compiler invocation so the backend wraps the compiler.
-    // e.g., "ccache gcc -c main.c -o main.o" instead of "gcc -c main.c -o main.o"
     const char* spawn_program = compiler_program;
     const char* spawn_args[MAX_COMPILE_ARGS + 1];  // +1 for the original program inserted as first arg
     int spawn_arg_count = arg_count;
@@ -376,8 +383,7 @@ static void compile_task(void* arg) {
         if (result.stdout_buf && result.stdout_buf[0] != '\0') {
             cdo_log_error("%s", result.stdout_buf);
         }
-        cdo_log_error("Compilation failed: %s (exit code %d)",
-                  job->source_path, result.exit_code);
+        cdo_log_error("Compilation failed: %s (exit code %d)", job->source_path, result.exit_code);
         ctx->result = result.exit_code;
     } else {
         ctx->result = 0;
@@ -431,87 +437,154 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
             return -1;
         }
 
+        // --- Phase 1: Threshold filter ---
+        // Identify files below threshold -> compile directly without cache (Req 2.2, 2.3, 6.2)
+        bool* below_threshold = (bool*)calloc((size_t)job_count, sizeof(bool));
+        if (!below_threshold) {
+            cdo_log_error("Failed to allocate threshold tracking array");
+            free(miss_indices);
+            free(cache_keys);
+            free(key_valid);
+            return -1;
+        }
+
+        int hash_eligible_count = 0;
         for (int i = 0; i < job_count; i++) {
+            int64_t src_size = get_source_file_size(jobs[i].source_path);
+            if (cache_threshold_skip(src_size, cache_config)) {
+                below_threshold[i] = true;
+                miss_indices[miss_count++] = i;
+                // key_valid[slot] stays false -> no cache store after compilation
+                cache_stats->skipped++;
+                cdo_log_trace("Cache threshold skip: %s (%lld bytes < %lld threshold)", jobs[i].source_path, (long long)src_size, (long long)cache_config->min_file_size);
+            } else {
+                hash_eligible_count++;
+            }
+        }
+
+        // --- Phase 2: Build CacheKeyInputs for hash-eligible files ---
+        HashResultSlot* hash_results = cache_hash_results_alloc(job_count);
+        HashJobCtx* hash_jobs = cache_hash_jobs_alloc(job_count);
+        char (*dep_paths)[280] = (char (*)[280])calloc((size_t)job_count, 280);
+
+        if (!hash_results || !hash_jobs || !dep_paths) {
+            cdo_log_error("Failed to allocate parallel hash structures");
+            free(below_threshold);
+            free(hash_results);
+            free(hash_jobs);
+            free(dep_paths);
+            free(miss_indices);
+            free(cache_keys);
+            free(key_valid);
+            return -1;
+        }
+
+        for (int i = 0; i < job_count; i++) {
+            hash_results[i].job_index = i;
+            if (below_threshold[i]) continue;  // Skip threshold-excluded files
+
             const CompileJob* job = &jobs[i];
 
-            // Compute dep file path: replace trailing ".o" with ".d"
-            char dep_path[280];
+            // Compute dep file path: replace trailing ".o"/".obj" with ".d"
             size_t olen = strlen(job->object_path);
-            if (olen < sizeof(dep_path)) {
-                memcpy(dep_path, job->object_path, olen + 1);
-                if (olen >= 4 && strcmp(dep_path + olen - 4, ".obj") == 0) {
-                    strcpy(dep_path + olen - 4, ".d");
-                } else if (olen >= 2 && dep_path[olen - 2] == '.' && dep_path[olen - 1] == 'o') {
-                    dep_path[olen - 1] = 'd';
+            if (olen < 280) {
+                memcpy(dep_paths[i], job->object_path, olen + 1);
+                if (olen >= 4 && strcmp(dep_paths[i] + olen - 4, ".obj") == 0) {
+                    strcpy(dep_paths[i] + olen - 4, ".d");
+                } else if (olen >= 2 && dep_paths[i][olen - 2] == '.' && dep_paths[i][olen - 1] == 'o') {
+                    dep_paths[i][olen - 1] = 'd';
                 } else {
-                    snprintf(dep_path, sizeof(dep_path), "%s.d", job->object_path);
+                    snprintf(dep_paths[i], 280, "%s.d", job->object_path);
                 }
             } else {
-                dep_path[0] = '\0';
+                dep_paths[i][0] = '\0';
             }
 
-            // Determine language standard string
-            const char* lang_std = NULL;
-            if (is_cpp_source(job->source_path)) {
-                lang_std = job->cpp_standard;
-            } else {
-                lang_std = job->c_standard;
+            // Determine language standard
+            const char* lang_std = is_cpp_source(job->source_path) ? job->cpp_standard : job->c_standard;
+
+            // Build CacheKeyInputs for this job
+            hash_jobs[i].inputs.source_path = job->source_path;
+            hash_jobs[i].inputs.compiler_path = info->path;
+            hash_jobs[i].inputs.compiler_version = info->version;
+            hash_jobs[i].inputs.language_standard = lang_std;
+            hash_jobs[i].inputs.optimize = job->optimize;
+            hash_jobs[i].inputs.debug_info = job->debug_info;
+            hash_jobs[i].inputs.defines = job->defines;
+            hash_jobs[i].inputs.define_count = job->define_count;
+            hash_jobs[i].inputs.include_paths = job->include_paths;
+            hash_jobs[i].inputs.include_path_count = job->include_path_count;
+            hash_jobs[i].inputs.dep_file_path = (dep_paths[i][0] != '\0') ? dep_paths[i] : NULL;
+            hash_jobs[i].result = &hash_results[i];
+        }
+
+        // --- Phase 3: Parallel hash dispatch (Req 8.1, 8.2, 8.4, 8.5, 8.6) ---
+        // Use thread pool for parallel SHA-256 computation when parallelism > 1
+        ThreadPool* hash_pool = NULL;
+        if (parallelism > 1 && hash_eligible_count > 0) {
+            hash_pool = threadpool_create(parallelism);
+            if (!hash_pool) {
+                cdo_log_warn("Failed to create thread pool for parallel hashing, falling back to serial");
             }
+        }
 
-            // Build CacheKeyInputs
-            CacheKeyInputs key_inputs = {0};
-            key_inputs.source_path = job->source_path;
-            key_inputs.compiler_path = info->path;
-            key_inputs.compiler_version = info->version;
-            key_inputs.language_standard = lang_std;
-            key_inputs.optimize = job->optimize;
-            key_inputs.debug_info = job->debug_info;
-            key_inputs.defines = job->defines;
-            key_inputs.define_count = job->define_count;
-            key_inputs.include_paths = job->include_paths;
-            key_inputs.include_path_count = job->include_path_count;
-            key_inputs.dep_file_path = (dep_path[0] != '\0') ? dep_path : NULL;
+        // Dispatch: pool=NULL triggers serial fallback inside the function
+        if (hash_eligible_count > 0) {
+            int hash_rc = cache_parallel_hash_dispatch(hash_pool, hash_jobs, job_count, hash_results);
+            if (hash_rc != 0) {
+                cdo_log_warn("Parallel hash dispatch returned error, some keys may be invalid");
+            }
+        }
 
-            // Compute cache key
-            char cache_key[CACHE_KEY_HEX_LEN + 1];
-            int key_rc = cache_compute_key(&key_inputs, cache_key);
-            if (key_rc != 0) {
-                // Cannot compute key (e.g., no dep file on first build), treat as miss
-                int slot = miss_count;
+        if (hash_pool) {
+            threadpool_destroy(hash_pool);
+            hash_pool = NULL;
+        }
+
+        // --- Phase 4: Partition into cache-hit/miss sets (Req 8.4) ---
+        for (int i = 0; i < job_count; i++) {
+            if (below_threshold[i]) continue;  // Already in miss list from phase 1
+
+            if (!hash_results[i].valid) {
+                // Key computation failed (e.g., no dep file on first build) -> treat as miss
                 miss_indices[miss_count++] = i;
-                key_valid[slot] = false;
                 cache_stats->misses++;
-                cdo_log_trace("Cache key computation failed for: %s (treating as miss)", job->source_path);
+                cdo_log_trace("Cache key computation failed for: %s (treating as miss)", jobs[i].source_path);
                 continue;
             }
 
-            // Try cache lookup
-            int lookup_rc = cache_lookup(cache_config, cache_key, job->object_path);
+            // Try cache lookup with the computed key
+            int lookup_rc = cache_lookup(cache_config, hash_results[i].key, jobs[i].object_path);
             if (lookup_rc == 0) {
-                // Cache hit â€” object was copied to dest
+                // Cache hit -- object was copied to dest
                 cache_stats->hits++;
-                cdo_log_trace("Cache hit: %s", job->source_path);
+                cdo_log_trace("Cache hit: %s", jobs[i].source_path);
             } else {
-                // Cache miss â€” needs compilation; store key for post-compile store
+                // Cache miss -- needs compilation; store key for post-compile store
                 int slot = miss_count;
                 miss_indices[miss_count++] = i;
-                memcpy(cache_keys[slot], cache_key, CACHE_KEY_HEX_LEN + 1);
+                memcpy(cache_keys[slot], hash_results[i].key, CACHE_KEY_HEX_LEN + 1);
                 key_valid[slot] = true;
                 cache_stats->misses++;
-                cdo_log_trace("Cache miss: %s", job->source_path);
+                cdo_log_trace("Cache miss: %s", jobs[i].source_path);
             }
         }
+
+        free(below_threshold);
+        free(hash_results);
+        free(hash_jobs);
+        free(dep_paths);
 
         // If all jobs were cache hits, we're done
         if (miss_count == 0) {
             free(miss_indices);
             free(cache_keys);
             free(key_valid);
-            cdo_log_info("All %d file(s) served from cache", job_count);
+            cdo_log_debug("All %d file(s) in batch served from cache", job_count);
             return 0;
         }
 
-        cdo_log_debug("Cache: %d hit(s), %d miss(es) â€” compiling misses", cache_stats->hits, miss_count);
+        cdo_log_debug("Cache: %d hit(s), %d miss(es) -- compiling misses", cache_stats->hits, miss_count);
     }
 
     // Determine which jobs to compile
@@ -554,7 +627,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         }
     }
 
-    // Create thread pool
+    // Create thread pool for compilation
     int threads = parallelism;
     if (threads <= 0) {
         threads = pal_cpu_count();
@@ -593,7 +666,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         if (contexts[i].result != 0) {
             failures++;
         } else if (use_cache && key_valid[i]) {
-            // Compilation succeeded and we have a valid cache key â€” store the .o in cache
+            // Compilation succeeded and we have a valid cache key -- store the .o in cache
             int job_idx = miss_indices[i];
             int store_rc = cache_store(cache_config, cache_keys[i], jobs[job_idx].object_path);
             if (store_rc == 0) {
@@ -620,7 +693,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
 }
 
 // ---------------------------------------------------------------------------
-// Test wrappers â€” expose internal arg builders for property-based testing
+// Test wrappers -- expose internal arg builders for property-based testing
 // ---------------------------------------------------------------------------
 
 int compiler_test_build_gcc_args(const CompileJob* job, const CompilerInfo* info,

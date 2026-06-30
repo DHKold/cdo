@@ -1,4 +1,5 @@
 #include "core/shader.h"
+#include "core/compiler.h"
 #include "core/log.h"
 #include "pal/pal.h"
 
@@ -63,39 +64,17 @@ static int get_basename_no_ext(const char* path, char* buf, size_t buf_size) {
     return 0;
 }
 
-/// Determine whether a shader needs recompilation by comparing mtimes.
+/// Determine whether a shader needs recompilation using compiler_link_is_fresh().
+/// Uses the same freshness logic as artifact linking: compares input (shader source)
+/// mtime against the output (compiled .dxil/.spv) mtime.
 /// Returns true if the shader should be compiled, false if it can be skipped.
 static bool shader_needs_compile(const char* source_path, const char* output_path) {
-    // If output doesn't exist, must compile (Requirement 9.4)
-    if (pal_path_exists(output_path) != 0) {
-        cdo_log_debug("Shader output missing, will compile: %s", source_path);
-        return true;
-    }
-
-    // Compare mtimes (Requirements 9.1, 9.2, 9.3)
-    uint64_t source_mtime = 0;
-    uint64_t output_mtime = 0;
-
-    if (pal_file_mtime(source_path, &source_mtime) != PAL_OK) {
-        // Can't read source mtime â€” safer to recompile
-        cdo_log_warn("Cannot read mtime for shader source: %s", source_path);
-        return true;
-    }
-
-    if (pal_file_mtime(output_path, &output_mtime) != PAL_OK) {
-        // Can't read output mtime â€” safer to recompile
-        cdo_log_warn("Cannot read mtime for shader output: %s", output_path);
-        return true;
-    }
-
-    // Skip if source is older than or equal to output (Requirement 9.2)
-    if (source_mtime <= output_mtime) {
-        cdo_log_debug("Shader up-to-date, skipping: %s", source_path);
+    const char* inputs[] = { source_path };
+    bool fresh = compiler_link_is_fresh(output_path, inputs, 1);
+    if (fresh) {
+        cdo_log_debug("shader up-to-date, skipping compilation: %s", output_path);
         return false;
     }
-
-    // Source is newer than output â€” recompile (Requirement 9.3)
-    cdo_log_debug("Shader source newer than output, will compile: %s", source_path);
     return true;
 }
 
@@ -289,7 +268,7 @@ int shader_compile(const char* shader_dir, const char* output_dir,
         return -1;
     }
 
-    // Report counts (Requirement 9.5)
+    // Report counts
     cdo_log_info("Compiled %d shader(s), skipped %d", ctx.compiled, ctx.skipped);
 
     // Output counts to caller

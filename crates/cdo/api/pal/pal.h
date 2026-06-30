@@ -42,6 +42,10 @@ void pal_spawn_result_free(PalSpawnResult* result);
 
 // --- Filesystem ---
 int pal_file_mtime(const char* path, uint64_t* mtime_ns);
+
+/// Get both modification time and file size in a single syscall.
+/// Returns PAL_OK on success, PAL_ERR_NOT_FOUND if file doesn't exist, PAL_ERR_IO on other errors.
+int pal_file_info(const char* path, uint64_t* mtime_ns, int64_t* file_size);
 int pal_dir_walk(const char* path, void(*callback)(const char* path, bool is_dir, void* ctx), void* ctx);
 int pal_mkdir_p(const char* path);
 int pal_rmdir_r(const char* path);

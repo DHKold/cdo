@@ -1,4 +1,5 @@
 #include "core/cache.h"
+#include "core/mtime_index.h"
 #include "core/log.h"
 #include "pal/pal.h"
 
@@ -433,11 +434,82 @@ static void cache_clear_walk_cb(const char* path, bool is_dir, void* ctx) {
     cc->entry_count++;
 }
 
+/// Derive the parent directory from a path by stripping the last path component.
+/// Writes the parent into `dest`. Returns 0 on success, -1 on failure.
+static int get_parent_dir(char* dest, size_t dest_size, const char* path) {
+    if (!path || !dest || dest_size == 0) return -1;
+
+    size_t len = strlen(path);
+    if (len == 0 || len >= dest_size) return -1;
+
+    memcpy(dest, path, len + 1);
+
+    // Strip trailing separators
+    while (len > 0 && (dest[len - 1] == '/' || dest[len - 1] == '\\')) {
+        dest[--len] = '\0';
+    }
+
+    // Find last separator
+    char* last_sep = NULL;
+    for (size_t i = len; i > 0; i--) {
+        if (dest[i - 1] == '/' || dest[i - 1] == '\\') {
+            last_sep = &dest[i - 1];
+            break;
+        }
+    }
+
+    if (!last_sep) return -1; // No parent found
+    *last_sep = '\0';
+    return 0;
+}
+
+/// pal_dir_walk callback: delete mtime_index_*.bin files found in the cache directory.
+static void delete_mtime_index_files_cb(const char* path, bool is_dir, void* ctx) {
+    (void)ctx;
+    if (is_dir) return;
+
+    // Extract filename from path
+    const char* filename = path;
+    const char* p = path;
+    while (*p) {
+        if (*p == '/' || *p == '\\') filename = p + 1;
+        p++;
+    }
+
+    // Check if filename matches mtime_index_*.bin pattern
+    const char* prefix = "mtime_index_";
+    const char* suffix = ".bin";
+    size_t prefix_len = strlen(prefix);
+    size_t suffix_len = strlen(suffix);
+    size_t filename_len = strlen(filename);
+
+    if (filename_len <= prefix_len + suffix_len) return;
+    if (strncmp(filename, prefix, prefix_len) != 0) return;
+    if (strcmp(filename + filename_len - suffix_len, suffix) != 0) return;
+
+    // Also skip .bin.tmp files (partial writes)
+    if (filename_len > 4 && strcmp(filename + filename_len - 4, ".tmp") == 0) return;
+
+    if (remove(path) == 0) {
+        cdo_log_debug("Cache: deleted mtime index file '%s'", path);
+    } else {
+        cdo_log_warn("Cache: failed to delete mtime index file '%s'", path);
+    }
+}
+
 int cache_clear(const CacheConfig* config) {
     if (!config) return -1;
 
+    // Derive the parent cache directory (e.g., .cdo/cache/) from config->path (.cdo/cache/objects/)
+    char cache_dir[260];
+    int has_cache_dir = (get_parent_dir(cache_dir, sizeof(cache_dir), config->path) == 0);
+
     // Check if cache directory exists
     if (pal_path_exists(config->path) != 0) {
+        // Even if objects dir doesn't exist, try to clean up mtime index files
+        if (has_cache_dir && pal_path_exists(cache_dir) == 0) {
+            pal_dir_walk(cache_dir, delete_mtime_index_files_cb, NULL);
+        }
         cdo_log_info("Cache cleared: freed 0 bytes (0 entries)");
         return 0;
     }
@@ -456,6 +528,11 @@ int cache_clear(const CacheConfig* config) {
     if (pal_mkdir_p(config->path) != 0) {
         cdo_log_warn("Cache: failed to recreate cache directory '%s'", config->path);
         return -1;
+    }
+
+    // Delete all mtime index files in the parent cache directory (Requirement 4.1)
+    if (has_cache_dir && pal_path_exists(cache_dir) == 0) {
+        pal_dir_walk(cache_dir, delete_mtime_index_files_cb, NULL);
     }
 
     cdo_log_info("Cache cleared: freed %lld bytes (%d entries)", (long long)ctx.total_size, ctx.entry_count);

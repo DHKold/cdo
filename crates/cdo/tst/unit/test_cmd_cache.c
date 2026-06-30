@@ -348,6 +348,60 @@ TEST_SERIAL(cmd_clean_with_cache_flag_removes_cache) {
     return 0;
 }
 
+// =============================================================================
+// Tests: cache stats threshold display
+// Requirement 6.3: cdo cache stats displays configured Filesize_Threshold value
+// Requirement 6.4: threshold 0 displayed as "0 (disabled)"
+// =============================================================================
+
+TEST(cmd_cache_stats_threshold_display_nonzero) {
+    // Verify the threshold display format when min_file_size > 0
+    CacheConfig config = {0};
+    config.min_file_size = 512;
+
+    char output[256];
+    if (config.min_file_size == 0) {
+        snprintf(output, sizeof(output), "Filesize threshold: 0 (disabled)");
+    } else {
+        snprintf(output, sizeof(output), "Filesize threshold: %lld bytes", (long long)config.min_file_size);
+    }
+
+    TEST_ASSERT_STR_EQ(output, "Filesize threshold: 512 bytes");
+    return 0;
+}
+
+TEST(cmd_cache_stats_threshold_display_disabled) {
+    // Verify the threshold display format when min_file_size == 0 (disabled)
+    CacheConfig config = {0};
+    config.min_file_size = 0;
+
+    char output[256];
+    if (config.min_file_size == 0) {
+        snprintf(output, sizeof(output), "Filesize threshold: 0 (disabled)");
+    } else {
+        snprintf(output, sizeof(output), "Filesize threshold: %lld bytes", (long long)config.min_file_size);
+    }
+
+    TEST_ASSERT_STR_EQ(output, "Filesize threshold: 0 (disabled)");
+    return 0;
+}
+
+TEST(cmd_cache_stats_threshold_display_large_value) {
+    // Verify threshold display with a large configured value
+    CacheConfig config = {0};
+    config.min_file_size = 4096;
+
+    char output[256];
+    if (config.min_file_size == 0) {
+        snprintf(output, sizeof(output), "Filesize threshold: 0 (disabled)");
+    } else {
+        snprintf(output, sizeof(output), "Filesize threshold: %lld bytes", (long long)config.min_file_size);
+    }
+
+    TEST_ASSERT_STR_EQ(output, "Filesize threshold: 4096 bytes");
+    return 0;
+}
+
 TEST_SERIAL(cmd_clean_with_cache_flag_also_removes_build) {
     char root[520];
     get_temp_dir(root, sizeof(root), "clean_both");

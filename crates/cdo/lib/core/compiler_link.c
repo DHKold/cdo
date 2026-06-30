@@ -379,3 +379,44 @@ int compiler_link(const LinkJob* job, const CompilerInfo* info) {
 
     return rc;
 }
+
+// ---------------------------------------------------------------------------
+// compiler_link_is_fresh - check if link artifact is up-to-date
+// ---------------------------------------------------------------------------
+
+bool compiler_link_is_fresh(const char* output_path, const char** input_paths, int input_count) {
+    if (!output_path || !input_paths || input_count <= 0) {
+        return false;
+    }
+
+    // If output doesn't exist, must link (Requirement 7.3)
+    if (pal_path_exists(output_path) != 0) {
+        return false;
+    }
+
+    // Get output mtime
+    uint64_t output_mtime = 0;
+    if (pal_file_mtime(output_path, &output_mtime) != 0) {
+        cdo_log_debug("link_is_fresh: cannot get mtime for output '%s', assuming stale", output_path);
+        return false;
+    }
+
+    // Check all inputs: if any input is newer than output, need to re-link
+    for (int i = 0; i < input_count; i++) {
+        if (!input_paths[i]) continue;
+
+        uint64_t input_mtime = 0;
+        if (pal_file_mtime(input_paths[i], &input_mtime) != 0) {
+            cdo_log_debug("link_is_fresh: cannot get mtime for input '%s', assuming stale", input_paths[i]);
+            return false;
+        }
+
+        if (input_mtime > output_mtime) {
+            cdo_log_debug("link_is_fresh: input '%s' is newer than output, need re-link", input_paths[i]);
+            return false;
+        }
+    }
+
+    cdo_log_debug("link_is_fresh: all inputs older than output '%s', skip link", output_path);
+    return true;
+}

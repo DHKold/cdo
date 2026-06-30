@@ -110,6 +110,14 @@ TEST(cdo_build_minimal_workspace) {
     // Verify cdo.exe exists
     TEST_ASSERT_EQ(pal_path_exists(cdo_exe), 0);
 
+    // Add vendored tools to PATH so cdo.exe can find the compiler in the fixture workspace
+    char tools_path[512];
+    snprintf(tools_path, sizeof(tools_path), "%s/.cdo/tools/w64devkit/bin", ws_root);
+    const char* existing_path = getenv("PATH");
+    char new_path[4096];
+    snprintf(new_path, sizeof(new_path), "%s;%s", tools_path, existing_path ? existing_path : "");
+    e2e_env_setvar(&env, "PATH", new_path);
+
     // --- Execute: spawn cdo.exe build in the fixture workspace ---
     E2eSpawnOpts opts = {0};
     opts.executable = cdo_exe;
@@ -123,7 +131,12 @@ TEST(cdo_build_minimal_workspace) {
     TEST_ASSERT_EQ(rc, E2E_OK);
 
     // --- Assert ---
-    // Build should succeed with exit code 0
+    // Log subprocess output on failure so root cause is visible in test logs
+    if (result.exit_code != 0) {
+        fprintf(stderr, "[cdo_build_minimal_workspace] cdo.exe exited %d\n", result.exit_code);
+        if (result.stdout_buf) fprintf(stderr, "[STDOUT] %s\n", result.stdout_buf);
+        if (result.stderr_buf) fprintf(stderr, "[STDERR] %s\n", result.stderr_buf);
+    }
     E2E_ASSERT_EXIT_CODE(&result, 0);
 
     // stdout should contain "Build completed" or "Compiling" indicating work was done
@@ -176,6 +189,14 @@ TEST(cdo_build_minimal_workspace_produces_exe) {
     char cdo_exe[512];
     snprintf(cdo_exe, sizeof(cdo_exe), "%s/cdo.exe", ws_root);
 
+    // Add vendored tools to PATH so cdo.exe can find the compiler
+    char tools_path[512];
+    snprintf(tools_path, sizeof(tools_path), "%s/.cdo/tools/w64devkit/bin", ws_root);
+    const char* existing_path = getenv("PATH");
+    char new_path[4096];
+    snprintf(new_path, sizeof(new_path), "%s;%s", tools_path, existing_path ? existing_path : "");
+    e2e_env_setvar(&env, "PATH", new_path);
+
     // --- Execute: build ---
     E2eSpawnOpts opts = {0};
     opts.executable = cdo_exe;
@@ -187,6 +208,12 @@ TEST(cdo_build_minimal_workspace_produces_exe) {
     E2eSpawnResult result = {0};
     rc = e2e_spawn(&env, &opts, &result);
     TEST_ASSERT_EQ(rc, E2E_OK);
+
+    if (result.exit_code != 0) {
+        fprintf(stderr, "[cdo_build_minimal_workspace_produces_exe] cdo.exe exited %d\n", result.exit_code);
+        if (result.stdout_buf) fprintf(stderr, "[STDOUT] %s\n", result.stdout_buf);
+        if (result.stderr_buf) fprintf(stderr, "[STDERR] %s\n", result.stderr_buf);
+    }
     E2E_ASSERT_EXIT_CODE(&result, 0);
 
     // --- Assert: the hello.exe artifact should exist ---

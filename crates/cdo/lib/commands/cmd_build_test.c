@@ -474,6 +474,69 @@ int build_test_module(const Workspace* ws, Crate* crate,
         }
     }
 
+    // Artifact freshness check: gather all inputs (objects + dep lib artifacts)
+    {
+        int fresh_input_count = compilable_count;
+        int dep_lib_artifact_count = 0;
+        if (crate->has_lib && crate->modules[MODULE_LIB].artifact_path[0] != '\0') dep_lib_artifact_count++;
+        for (int d = 0; d < crate->dep_count; d++) {
+            int dep_idx = crate->dep_indices[d];
+            if (dep_idx < 0 || dep_idx >= ws->crate_count) continue;
+            Crate* dep_crate = &ws->crates[dep_idx];
+            if (dep_crate->has_lib && dep_crate->modules[MODULE_LIB].artifact_path[0] != '\0') dep_lib_artifact_count++;
+        }
+        for (int d = 0; d < crate->dev_dep_count; d++) {
+            int dep_idx = crate->dev_dep_indices[d];
+            if (dep_idx < 0 || dep_idx >= ws->crate_count) continue;
+            Crate* dep_crate = &ws->crates[dep_idx];
+            if (dep_crate->has_lib && dep_crate->modules[MODULE_LIB].artifact_path[0] != '\0') dep_lib_artifact_count++;
+        }
+        fresh_input_count += dep_lib_artifact_count;
+
+        const char** fresh_inputs = (const char**)malloc(sizeof(const char*) * (size_t)fresh_input_count);
+        if (fresh_inputs) {
+            int fi = 0;
+            for (int i = 0; i < compilable_count; i++) fresh_inputs[fi++] = link_obj_paths[i];
+            if (crate->has_lib && crate->modules[MODULE_LIB].artifact_path[0] != '\0') {
+                fresh_inputs[fi++] = crate->modules[MODULE_LIB].artifact_path;
+            }
+            for (int d = 0; d < crate->dep_count; d++) {
+                int dep_idx = crate->dep_indices[d];
+                if (dep_idx < 0 || dep_idx >= ws->crate_count) continue;
+                Crate* dep_crate = &ws->crates[dep_idx];
+                if (dep_crate->has_lib && dep_crate->modules[MODULE_LIB].artifact_path[0] != '\0') {
+                    fresh_inputs[fi++] = dep_crate->modules[MODULE_LIB].artifact_path;
+                }
+            }
+            for (int d = 0; d < crate->dev_dep_count; d++) {
+                int dep_idx = crate->dev_dep_indices[d];
+                if (dep_idx < 0 || dep_idx >= ws->crate_count) continue;
+                Crate* dep_crate = &ws->crates[dep_idx];
+                if (dep_crate->has_lib && dep_crate->modules[MODULE_LIB].artifact_path[0] != '\0') {
+                    fresh_inputs[fi++] = dep_crate->modules[MODULE_LIB].artifact_path;
+                }
+            }
+
+            if (compiler_link_is_fresh(artifact_path, fresh_inputs, fi)) {
+                cdo_log_debug("artifact up-to-date, skipping link: %s", artifact_path);
+                free(fresh_inputs);
+                strncpy(tst_mod->artifact_path, artifact_path, sizeof(tst_mod->artifact_path) - 1);
+                tst_mod->artifact_path[sizeof(tst_mod->artifact_path) - 1] = '\0';
+                for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
+                free(link_obj_bufs);
+                free(link_obj_paths);
+                free(dirty_indices);
+                free(compilable_indices);
+                free(all_includes);
+                for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+                free(inc_paths);
+                filelist_free(&sources);
+                return 0;
+            }
+            free(fresh_inputs);
+        }
+    }
+
     cdo_log_info("Linking tst/ module: %s", artifact_path);
     rc = compiler_link(&link_job, &link_compiler);
 

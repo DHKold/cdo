@@ -108,6 +108,13 @@ int cmd_cache_stats(const CliParseResult* result, void* ctx) {
 
     cdo_log_info("Cache path: %s", ws.cache_config.path);
 
+    /* Display configured filesize threshold (Requirement 6.3, 6.4) */
+    if (ws.cache_config.min_file_size == 0) {
+        cdo_log_info("Filesize threshold: 0 (disabled)");
+    } else {
+        cdo_log_info("Filesize threshold: %lld bytes", (long long)ws.cache_config.min_file_size);
+    }
+
     workspace_free(&ws);
     return 0;
 }

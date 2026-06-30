@@ -362,6 +362,23 @@ int build_library_module(const Workspace* ws, Crate* crate,
     link_job.link_lib_count = 0;
     link_job.shared = false;
 
+    // Artifact freshness check: for lib (archive), inputs are just the object files
+    if (compiler_link_is_fresh(artifact_path, archive_obj_paths, compilable_count)) {
+        cdo_log_debug("artifact up-to-date, skipping link: %s", artifact_path);
+        strncpy(lib_mod->artifact_path, artifact_path, sizeof(lib_mod->artifact_path) - 1);
+        lib_mod->artifact_path[sizeof(lib_mod->artifact_path) - 1] = '\0';
+        for (int i = 0; i < compilable_count; i++) free(archive_obj_bufs[i]);
+        free(archive_obj_bufs);
+        free(archive_obj_paths);
+        free(dirty_indices);
+        free(compilable_indices);
+        free(all_includes);
+        for (int i = 0; i < inc_count; i++) free(inc_paths[i]);
+        free(inc_paths);
+        filelist_free(&sources);
+        return 0;
+    }
+
     cdo_log_info("Archiving lib/ module: %s", artifact_path);
     rc = compiler_link(&link_job, compiler);
 

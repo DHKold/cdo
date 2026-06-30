@@ -17,6 +17,8 @@ typedef struct {
     int64_t max_size_bytes;     // Max cache size in bytes (default: 2GB)
     bool    enabled;            // Whether caching is active (default: true)
     char    backend[32];        // "builtin", "ccache", or "sccache"
+    bool    fast_path_enabled;  // Enable mtime fast-path (default: true)
+    int64_t min_file_size;      // Filesize threshold in bytes (default: 512)
 } CacheConfig;
 
 /// Cache statistics for a single build run.
@@ -25,6 +27,7 @@ typedef struct {
     int     misses;
     int     stored;
     int     evicted;
+    int     skipped;    // Files bypassed due to filesize threshold
 } CacheStats;
 
 #ifdef __cplusplus

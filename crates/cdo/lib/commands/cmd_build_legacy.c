@@ -418,8 +418,14 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
             }
 
             cdo_log_info("Linking %s", output_path);
-            rc = compiler_link(&link_job, &link_compiler);
-            if (rc != 0) { cdo_log_error("linking failed for crate '%s'", crate->name); failed = 1; }
+
+            // Artifact freshness check: use merged objects as inputs
+            if (compiler_link_is_fresh(output_path, merged_obj_paths, total_link_objs)) {
+                cdo_log_debug("artifact up-to-date, skipping link: %s", output_path);
+            } else {
+                rc = compiler_link(&link_job, &link_compiler);
+                if (rc != 0) { cdo_log_error("linking failed for crate '%s'", crate->name); failed = 1; }
+            }
 
             if (!failed && crate->type == CRATE_EXECUTABLE) {
                 int deployed = deploy_catalog_files(ws->root_path, build_dir);

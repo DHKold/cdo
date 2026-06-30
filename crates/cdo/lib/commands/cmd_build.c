@@ -6,6 +6,7 @@
 #include "model/module.h"
 #include "model/dag.h"
 #include "core/cache.h"
+#include "core/cache_log.h"
 #include "core/dag_scheduler.h"
 #include "model/hooks.h"
 #include "core/hooks_exec.h"
@@ -770,13 +771,9 @@ build_done:
     if (failed) {
         cdo_log_error("build failed");
     } else {
-        // Print cache summary (Req 5.1, 5.2, 5.3)
+        // Emit consolidated cache summary (Req 3.1, 3.2, 3.5)
         if (cache_active) {
-            int total = cache_stats.hits + cache_stats.misses;
-            if (total > 0) {
-                int hit_rate = (cache_stats.hits * 100) / total;
-                cdo_log_info("Cache: %d hits, %d misses (%d%% hit rate)", cache_stats.hits, cache_stats.misses, hit_rate);
-            }
+            cache_log_summary(&cache_stats);
         }
 
         double elapsed_s = (double)(pal_time_ms() - build_start_ms) / 1000.0;

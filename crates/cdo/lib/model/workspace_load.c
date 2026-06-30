@@ -487,6 +487,8 @@ int workspace_load(const char* root_path, Workspace* ws) {
     ws->cache_config.max_size_bytes = (int64_t)2 * 1024 * 1024 * 1024; // 2GB
     strncpy(ws->cache_config.backend, "builtin", sizeof(ws->cache_config.backend) - 1);
     ws->cache_config.backend[sizeof(ws->cache_config.backend) - 1] = '\0';
+    ws->cache_config.fast_path_enabled = true;
+    ws->cache_config.min_file_size = 512;
 
     const TomlValue* cache_enabled_val = toml_get(root, "workspace.settings.cache.enabled");
     if (cache_enabled_val && cache_enabled_val->type == TOML_BOOL) {
@@ -513,6 +515,28 @@ int workspace_load(const char* root_path, Workspace* ws) {
     if (cache_backend_val && cache_backend_val->type == TOML_STRING && cache_backend_val->as.string) {
         strncpy(ws->cache_config.backend, cache_backend_val->as.string, sizeof(ws->cache_config.backend) - 1);
         ws->cache_config.backend[sizeof(ws->cache_config.backend) - 1] = '\0';
+    }
+
+    const TomlValue* cache_fast_path_val = toml_get(root, "workspace.settings.cache.fast-path");
+    if (cache_fast_path_val) {
+        if (cache_fast_path_val->type == TOML_BOOL) {
+            ws->cache_config.fast_path_enabled = cache_fast_path_val->as.boolean;
+        } else {
+            cdo_log_warn("Invalid cache fast-path value (expected boolean), using default true");
+        }
+    }
+
+    const TomlValue* cache_min_file_size_val = toml_get(root, "workspace.settings.cache.min-file-size");
+    if (cache_min_file_size_val) {
+        if (cache_min_file_size_val->type == TOML_INTEGER) {
+            if (cache_min_file_size_val->as.integer < 0) {
+                cdo_log_warn("Invalid cache min-file-size '%lld' (must be non-negative), using default 512", (long long)cache_min_file_size_val->as.integer);
+            } else {
+                ws->cache_config.min_file_size = cache_min_file_size_val->as.integer;
+            }
+        } else {
+            cdo_log_warn("Invalid cache min-file-size value (expected integer), using default 512");
+        }
     }
 
     // Parse [workspace.settings.format] section with defaults

@@ -66,6 +66,33 @@ int pal_file_mtime(const char* path, uint64_t* mtime_ns) {
     return PAL_OK;
 }
 
+int pal_file_info(const char* path, uint64_t* mtime_ns, int64_t* file_size) {
+    if (!path || !mtime_ns || !file_size) return PAL_ERR_IO;
+
+    wchar_t* wpath = utf8_to_wide(path);
+    if (!wpath) return PAL_ERR_IO;
+
+    WIN32_FILE_ATTRIBUTE_DATA attr;
+    BOOL ok = GetFileAttributesExW(wpath, GetFileExInfoStandard, &attr);
+    free(wpath);
+
+    if (!ok) return PAL_ERR_NOT_FOUND;
+
+    // Convert FILETIME to nanoseconds since Unix epoch
+    static const uint64_t EPOCH_DIFF = 116444736000000000ULL;
+    uint64_t ft = ((uint64_t)attr.ftLastWriteTime.dwHighDateTime << 32)
+                | (uint64_t)attr.ftLastWriteTime.dwLowDateTime;
+
+    if (ft < EPOCH_DIFF) {
+        *mtime_ns = 0;
+    } else {
+        *mtime_ns = (ft - EPOCH_DIFF) * 100;
+    }
+
+    *file_size = (int64_t)(((uint64_t)attr.nFileSizeHigh << 32) | (uint64_t)attr.nFileSizeLow);
+    return PAL_OK;
+}
+
 int pal_dir_walk(const char* path,
                  void(*callback)(const char* entry_path, bool is_dir, void* ctx),
                  void* ctx) {
@@ -368,6 +395,27 @@ int pal_file_mtime(const char* path, uint64_t* mtime_ns) {
     // Fallback: seconds only
     *mtime_ns = (uint64_t)st.st_mtime * 1000000000ULL;
 #endif
+    return PAL_OK;
+}
+
+int pal_file_info(const char* path, uint64_t* mtime_ns, int64_t* file_size) {
+    if (!path || !mtime_ns || !file_size) return PAL_ERR_IO;
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return (errno == ENOENT) ? PAL_ERR_NOT_FOUND : PAL_ERR_IO;
+    }
+
+#if defined(__APPLE__)
+    *mtime_ns = (uint64_t)st.st_mtimespec.tv_sec * 1000000000ULL
+              + (uint64_t)st.st_mtimespec.tv_nsec;
+#elif defined(__linux__)
+    *mtime_ns = (uint64_t)st.st_mtim.tv_sec * 1000000000ULL
+              + (uint64_t)st.st_mtim.tv_nsec;
+#else
+    *mtime_ns = (uint64_t)st.st_mtime * 1000000000ULL;
+#endif
+    *file_size = (int64_t)st.st_size;
     return PAL_OK;
 }
 

@@ -527,3 +527,216 @@ TEST(cache_init_null_ws_root) {
 
     return 0;
 }
+
+// =============================================================================
+// Tests: fast-path configuration parsing
+// Validates: Requirements 5.1, 5.4, 5.6
+// =============================================================================
+
+TEST_SERIAL(cache_config_fast_path_defaults) {
+    char root[520];
+    get_temp_dir(root, sizeof(root), "fp_defaults");
+
+    const char* toml =
+        "[workspace]\n"
+        "members = []\n"
+        "[workspace.settings.cache]\n"
+        "enabled = true\n";
+
+    int rc = create_test_workspace(root, toml);
+    TEST_ASSERT_EQ(rc, 0);
+
+    Workspace ws = {0};
+    rc = workspace_load(root, &ws);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Requirement 5.1/5.4: fast-path defaults to true when key is absent
+    TEST_ASSERT(ws.cache_config.fast_path_enabled == true);
+
+    // Requirement 2.4: min_file_size defaults to 512 when key is absent
+    TEST_ASSERT_EQ(ws.cache_config.min_file_size, (int64_t)512);
+
+    workspace_free(&ws);
+    cleanup_test_workspace(root);
+    return 0;
+}
+
+TEST_SERIAL(cache_config_fast_path_explicit_false) {
+    char root[520];
+    get_temp_dir(root, sizeof(root), "fp_false");
+
+    const char* toml =
+        "[workspace]\n"
+        "members = []\n"
+        "[workspace.settings.cache]\n"
+        "fast-path = false\n";
+
+    int rc = create_test_workspace(root, toml);
+    TEST_ASSERT_EQ(rc, 0);
+
+    Workspace ws = {0};
+    rc = workspace_load(root, &ws);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Requirement 5.1: fast-path = false disables the mtime fast-path
+    TEST_ASSERT(ws.cache_config.fast_path_enabled == false);
+
+    workspace_free(&ws);
+    cleanup_test_workspace(root);
+    return 0;
+}
+
+TEST_SERIAL(cache_config_fast_path_explicit_true) {
+    char root[520];
+    get_temp_dir(root, sizeof(root), "fp_true");
+
+    const char* toml =
+        "[workspace]\n"
+        "members = []\n"
+        "[workspace.settings.cache]\n"
+        "fast-path = true\n";
+
+    int rc = create_test_workspace(root, toml);
+    TEST_ASSERT_EQ(rc, 0);
+
+    Workspace ws = {0};
+    rc = workspace_load(root, &ws);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Requirement 5.1: fast-path = true explicitly enables fast-path
+    TEST_ASSERT(ws.cache_config.fast_path_enabled == true);
+
+    workspace_free(&ws);
+    cleanup_test_workspace(root);
+    return 0;
+}
+
+TEST_SERIAL(cache_config_fast_path_invalid_non_boolean) {
+    char root[520];
+    get_temp_dir(root, sizeof(root), "fp_invalid");
+
+    const char* toml =
+        "[workspace]\n"
+        "members = []\n"
+        "[workspace.settings.cache]\n"
+        "fast-path = \"yes\"\n";
+
+    int rc = create_test_workspace(root, toml);
+    TEST_ASSERT_EQ(rc, 0);
+
+    Workspace ws = {0};
+    rc = workspace_load(root, &ws);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Requirement 5.6: invalid non-boolean value → warning logged, defaults to true
+    TEST_ASSERT(ws.cache_config.fast_path_enabled == true);
+
+    workspace_free(&ws);
+    cleanup_test_workspace(root);
+    return 0;
+}
+
+// =============================================================================
+// Tests: min-file-size configuration parsing
+// Validates: Requirements 5.2, 5.4, 5.5, 2.4, 2.6
+// =============================================================================
+
+TEST_SERIAL(cache_config_min_file_size_valid) {
+    char root[520];
+    get_temp_dir(root, sizeof(root), "mfs_valid");
+
+    const char* toml =
+        "[workspace]\n"
+        "members = []\n"
+        "[workspace.settings.cache]\n"
+        "min-file-size = 1024\n";
+
+    int rc = create_test_workspace(root, toml);
+    TEST_ASSERT_EQ(rc, 0);
+
+    Workspace ws = {0};
+    rc = workspace_load(root, &ws);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Requirement 5.2: min-file-size accepts a valid non-negative integer
+    TEST_ASSERT_EQ(ws.cache_config.min_file_size, (int64_t)1024);
+
+    workspace_free(&ws);
+    cleanup_test_workspace(root);
+    return 0;
+}
+
+TEST_SERIAL(cache_config_min_file_size_zero_disables) {
+    char root[520];
+    get_temp_dir(root, sizeof(root), "mfs_zero");
+
+    const char* toml =
+        "[workspace]\n"
+        "members = []\n"
+        "[workspace.settings.cache]\n"
+        "min-file-size = 0\n";
+
+    int rc = create_test_workspace(root, toml);
+    TEST_ASSERT_EQ(rc, 0);
+
+    Workspace ws = {0};
+    rc = workspace_load(root, &ws);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Requirement 2.5/2.6: threshold set to 0 disables size-based skipping
+    TEST_ASSERT_EQ(ws.cache_config.min_file_size, (int64_t)0);
+
+    workspace_free(&ws);
+    cleanup_test_workspace(root);
+    return 0;
+}
+
+TEST_SERIAL(cache_config_min_file_size_negative) {
+    char root[520];
+    get_temp_dir(root, sizeof(root), "mfs_neg");
+
+    const char* toml =
+        "[workspace]\n"
+        "members = []\n"
+        "[workspace.settings.cache]\n"
+        "min-file-size = -100\n";
+
+    int rc = create_test_workspace(root, toml);
+    TEST_ASSERT_EQ(rc, 0);
+
+    Workspace ws = {0};
+    rc = workspace_load(root, &ws);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Requirement 5.5: negative value → warning logged, defaults to 512
+    TEST_ASSERT_EQ(ws.cache_config.min_file_size, (int64_t)512);
+
+    workspace_free(&ws);
+    cleanup_test_workspace(root);
+    return 0;
+}
+
+TEST_SERIAL(cache_config_min_file_size_non_integer) {
+    char root[520];
+    get_temp_dir(root, sizeof(root), "mfs_str");
+
+    const char* toml =
+        "[workspace]\n"
+        "members = []\n"
+        "[workspace.settings.cache]\n"
+        "min-file-size = \"abc\"\n";
+
+    int rc = create_test_workspace(root, toml);
+    TEST_ASSERT_EQ(rc, 0);
+
+    Workspace ws = {0};
+    rc = workspace_load(root, &ws);
+    TEST_ASSERT_EQ(rc, 0);
+
+    // Requirement 5.5: non-integer value → warning logged, defaults to 512
+    TEST_ASSERT_EQ(ws.cache_config.min_file_size, (int64_t)512);
+
+    workspace_free(&ws);
+    cleanup_test_workspace(root);
+    return 0;
+}

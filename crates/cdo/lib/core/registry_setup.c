@@ -38,7 +38,7 @@ static const CliArgSpec s_global_options[] = {
     { .long_name = "log-level",    .short_name = 0,   .type = CLI_ARG_ENUM,   .description = "Set the log verbosity level", .default_value = "info", .enum_values = s_log_level_values },
     { .long_name = "completions",  .short_name = 0,   .type = CLI_ARG_ENUM,   .description = "Output a shell completion script and exit (bash, zsh, powershell)", .enum_values = s_completions_values },
     { .long_name = "profile",      .short_name = 0,   .type = CLI_ARG_STRING, .description = "Build profile to use" },
-    { .long_name = "jobs",         .short_name = 'j', .type = CLI_ARG_INT,    .description = "Number of parallel jobs", .int_min = 1 },
+    { .long_name = "jobs",         .short_name = 'j', .type = CLI_ARG_INT,    .description = "Number of parallel jobs", .int_min = 1, .int_max = 256 },
     { .long_name = "lock-timeout", .short_name = 0,   .type = CLI_ARG_INT,    .description = "Lock acquisition timeout in seconds", .int_min = 0 },
 };
 

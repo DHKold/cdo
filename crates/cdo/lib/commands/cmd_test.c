@@ -161,7 +161,7 @@ int cmd_test(const CliParseResult* result, void* ctx) {
     int crates_failed = 0;       // test failures (exit 1)
     int crates_infra_error = 0;  // build/infrastructure errors (exit 2)
 
-    bool use_color = output_use_color();
+    bool use_color = cdo_log_use_color();
 
     for (int i = 0; i < test_count; i++) {
         const Crate* crate = test_crates[i];
