@@ -1,5 +1,0 @@
-[crate]
-name = "mid"
-
-[dependencies]
-base = {}

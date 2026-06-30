@@ -16,6 +16,13 @@
 - When testing the produced `cdo.exe` (from the build folder), create workspaces in `e2e/<workspace_name>/`.
 - Always prefer using `cdo` commands rather than manually editing workspace files (use `cdo init`, `cdo build`, etc.).
 
+## Versioning
+
+- When starting on a feature, create a new branch
+- Commit coherant set of tasks that can be easily reviewed and tested
+- When the feature is done, do a final code review to assess Code Quality
+- The use is responsible for merging the branch
+
 ## Conventions
 
 - Log any pain point, bug, or missing feature encountered during development so it can be tracked and handled later. Use `TODO:` or `FIXME:` comments in code, or note them in the spec's notes section.
