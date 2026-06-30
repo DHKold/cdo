@@ -43,6 +43,11 @@ void pal_spawn_result_free(PalSpawnResult* result);
 // --- Filesystem ---
 int pal_file_mtime(const char* path, uint64_t* mtime_ns);
 
+/// Set the modification time of a file.
+/// mtime_ns is nanoseconds since Unix epoch (1970-01-01).
+/// Returns PAL_OK on success, non-zero on failure.
+int pal_file_set_mtime(const char* path, uint64_t mtime_ns);
+
 /// Get both modification time and file size in a single syscall.
 /// Returns PAL_OK on success, PAL_ERR_NOT_FOUND if file doesn't exist, PAL_ERR_IO on other errors.
 int pal_file_info(const char* path, uint64_t* mtime_ns, int64_t* file_size);

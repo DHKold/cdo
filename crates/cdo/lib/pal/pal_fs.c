@@ -93,6 +93,31 @@ int pal_file_info(const char* path, uint64_t* mtime_ns, int64_t* file_size) {
     return PAL_OK;
 }
 
+int pal_file_set_mtime(const char* path, uint64_t mtime_ns) {
+    if (!path) return PAL_ERR_IO;
+
+    wchar_t* wpath = utf8_to_wide(path);
+    if (!wpath) return PAL_ERR_IO;
+
+    HANDLE hFile = CreateFileW(wpath, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(wpath);
+
+    if (hFile == INVALID_HANDLE_VALUE) return PAL_ERR_NOT_FOUND;
+
+    // Convert nanoseconds since Unix epoch to Windows FILETIME (100ns intervals since 1601-01-01)
+    static const uint64_t EPOCH_DIFF = 116444736000000000ULL;
+    uint64_t ft_value = (mtime_ns / 100) + EPOCH_DIFF;
+
+    FILETIME ft;
+    ft.dwLowDateTime = (DWORD)(ft_value & 0xFFFFFFFF);
+    ft.dwHighDateTime = (DWORD)(ft_value >> 32);
+
+    BOOL ok = SetFileTime(hFile, NULL, NULL, &ft);
+    CloseHandle(hFile);
+
+    return ok ? PAL_OK : PAL_ERR_IO;
+}
+
 int pal_dir_walk(const char* path,
                  void(*callback)(const char* entry_path, bool is_dir, void* ctx),
                  void* ctx) {
@@ -416,6 +441,23 @@ int pal_file_info(const char* path, uint64_t* mtime_ns, int64_t* file_size) {
     *mtime_ns = (uint64_t)st.st_mtime * 1000000000ULL;
 #endif
     *file_size = (int64_t)st.st_size;
+    return PAL_OK;
+}
+
+int pal_file_set_mtime(const char* path, uint64_t mtime_ns) {
+    if (!path) return PAL_ERR_IO;
+
+    struct timespec times[2];
+    // atime: keep current (UTIME_OMIT)
+    times[0].tv_sec = 0;
+    times[0].tv_nsec = UTIME_OMIT;
+    // mtime: set to requested value
+    times[1].tv_sec = (time_t)(mtime_ns / 1000000000ULL);
+    times[1].tv_nsec = (long)(mtime_ns % 1000000000ULL);
+
+    if (utimensat(AT_FDCWD, path, times, 0) != 0) {
+        return PAL_ERR_IO;
+    }
     return PAL_OK;
 }
 

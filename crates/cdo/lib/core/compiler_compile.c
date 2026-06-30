@@ -387,7 +387,7 @@ static void compile_task(void* arg) {
         ctx->result = result.exit_code;
     } else {
         ctx->result = 0;
-        cdo_log_trace("Compiled: %s -> %s", job->source_path, job->object_path);
+        cdo_log_info("Compiled: %s", job->source_path);
 
         // For MSVC: parse /showIncludes output and write a .d dep file
         if (info->family == COMPILER_MSVC && result.stdout_buf) {
@@ -453,9 +453,21 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
             int64_t src_size = get_source_file_size(jobs[i].source_path);
             if (cache_threshold_skip(src_size, cache_config)) {
                 below_threshold[i] = true;
+                cache_stats->skipped++;
+
+                // For threshold-skipped files, check if the object is already up-to-date
+                // (source mtime <= object mtime). If so, skip compilation entirely to avoid
+                // generating a fresh object that would trigger unnecessary re-linking.
+                uint64_t src_mtime = 0, obj_mtime = 0;
+                if (pal_file_mtime(jobs[i].source_path, &src_mtime) == 0 &&
+                    pal_file_mtime(jobs[i].object_path, &obj_mtime) == 0 &&
+                    obj_mtime >= src_mtime) {
+                    cdo_log_trace("Cache threshold skip (up-to-date): %s", jobs[i].source_path);
+                    continue;  // Object is fresh — no need to recompile
+                }
+
                 miss_indices[miss_count++] = i;
                 // key_valid[slot] stays false -> no cache store after compilation
-                cache_stats->skipped++;
                 cdo_log_trace("Cache threshold skip: %s (%lld bytes < %lld threshold)", jobs[i].source_path, (long long)src_size, (long long)cache_config->min_file_size);
             } else {
                 hash_eligible_count++;
@@ -688,7 +700,6 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         return failures;
     }
 
-    cdo_log_info("Compiled %d file(s) successfully", compile_count);
     return 0;
 }
 

@@ -117,6 +117,13 @@ int cache_lookup(const CacheConfig* config, const char* key, const char* dest_pa
         return -1; // Cache miss
     }
 
+    // If the destination already exists, skip the copy — same cache key means
+    // identical content, and rewriting would needlessly update the file's mtime
+    // which triggers unnecessary re-linking downstream.
+    if (pal_path_exists(dest_path) == 0) {
+        return 0;
+    }
+
     // Copy cached object to destination
     if (pal_file_copy(cache_file, dest_path) != 0) {
         // Copy failed (corrupted/truncated): delete the cache entry and report miss
