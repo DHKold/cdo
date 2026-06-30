@@ -4,7 +4,7 @@ c-standard = 17
 cpp-standard = 20
 
 [build]
-link-libs = ["winhttp"]
+link-libs = ["winhttp", "stdc++"]
 
 [dependencies]
 cdo_cli = {}
