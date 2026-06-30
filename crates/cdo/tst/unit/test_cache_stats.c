@@ -1,9 +1,8 @@
 // crates/cdo/tst/unit/test_cache_stats.c
-// Unit tests for cache statistics tracking, cache clear mtime index deletion, and threshold display
-// Validates: Requirements 4.1, 5.1, 5.2, 5.3, 6.3, 6.4
+// Unit tests for cache statistics tracking, cache clear, and threshold display
+// Validates: Requirements 5.1, 5.2, 5.3, 6.3, 6.4
 #include "cdo_ut.h"
 #include "core/cache.h"
-#include "core/mtime_index.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -22,16 +21,8 @@ static void get_temp_dir(char* buf, size_t size, const char* suffix) {
     pal_path_normalize(buf);
 }
 
-/// Build the expected mtime index file path for a profile.
-static void get_index_file_path(char* buf, size_t size, const char* cache_dir, const char* profile) {
-    char filename[128];
-    snprintf(filename, sizeof(filename), "mtime_index_%s.bin", profile);
-    pal_path_join(buf, size, cache_dir, filename);
-}
-
 /// Set up a cache directory structure with fake objects for testing.
 /// root/cache_store/ is the objects directory (config->path).
-/// root/ is the parent cache dir where mtime index files live.
 static void setup_cache_with_objects(const char* root, CacheConfig* config) {
     char cache_dir[520];
     pal_path_join(cache_dir, sizeof(cache_dir), root, "cache_store");
@@ -216,101 +207,8 @@ TEST(cache_stats_accumulation_across_crates) {
 }
 
 // =============================================================================
-// Tests: cache_clear removes mtime index files
-// Requirement 4.1: `cdo cache clear` also deletes the Mtime_Index file
+// Tests: cache_clear removes old files
 // =============================================================================
-
-TEST_SERIAL(cache_clear_removes_mtime_index_single_profile) {
-    char root[520];
-    get_temp_dir(root, sizeof(root), "clear_mtime");
-    pal_rmdir_r(root);
-    pal_mkdir_p(root);
-
-    CacheConfig config;
-    setup_cache_with_objects(root, &config);
-
-    // Create and save a mtime index for "debug" profile in the parent cache dir (root)
-    MtimeIndex* idx = NULL;
-    int rc = mtime_index_load(root, "debug", &idx);
-    TEST_ASSERT_EQ(rc, 0);
-
-    MtimeEntry entry = {0};
-    strncpy(entry.path, "C:/project/src/main.c", sizeof(entry.path) - 1);
-    entry.mtime_ns = 1700000000000000000ULL;
-    entry.file_size = 4096;
-    strncpy(entry.cache_key, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", sizeof(entry.cache_key) - 1);
-    mtime_index_upsert(idx, &entry);
-
-    rc = mtime_index_save(idx, root, "debug");
-    TEST_ASSERT_EQ(rc, 0);
-    mtime_index_free(idx);
-
-    // Verify the index file exists
-    char idx_path[520];
-    get_index_file_path(idx_path, sizeof(idx_path), root, "debug");
-    TEST_ASSERT_EQ(pal_path_exists(idx_path), 0);
-
-    // Clear the cache - should also delete the mtime index file
-    rc = cache_clear(&config);
-    TEST_ASSERT_EQ(rc, 0);
-
-    // Verify the mtime index file is deleted
-    TEST_ASSERT(pal_path_exists(idx_path) != 0);
-
-    pal_rmdir_r(root);
-    return 0;
-}
-
-TEST_SERIAL(cache_clear_removes_mtime_index_multiple_profiles) {
-    char root[520];
-    get_temp_dir(root, sizeof(root), "clear_mtime_multi");
-    pal_rmdir_r(root);
-    pal_mkdir_p(root);
-
-    CacheConfig config;
-    setup_cache_with_objects(root, &config);
-
-    // Create and save mtime indexes for both "debug" and "release" profiles
-    MtimeEntry entry = {0};
-    strncpy(entry.path, "C:/project/src/main.c", sizeof(entry.path) - 1);
-    entry.mtime_ns = 1700000000000000000ULL;
-    entry.file_size = 4096;
-    strncpy(entry.cache_key, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", sizeof(entry.cache_key) - 1);
-
-    MtimeIndex* debug_idx = NULL;
-    int rc = mtime_index_load(root, "debug", &debug_idx);
-    TEST_ASSERT_EQ(rc, 0);
-    mtime_index_upsert(debug_idx, &entry);
-    rc = mtime_index_save(debug_idx, root, "debug");
-    TEST_ASSERT_EQ(rc, 0);
-    mtime_index_free(debug_idx);
-
-    MtimeIndex* release_idx = NULL;
-    rc = mtime_index_load(root, "release", &release_idx);
-    TEST_ASSERT_EQ(rc, 0);
-    mtime_index_upsert(release_idx, &entry);
-    rc = mtime_index_save(release_idx, root, "release");
-    TEST_ASSERT_EQ(rc, 0);
-    mtime_index_free(release_idx);
-
-    // Verify both index files exist
-    char debug_path[520], release_path[520];
-    get_index_file_path(debug_path, sizeof(debug_path), root, "debug");
-    get_index_file_path(release_path, sizeof(release_path), root, "release");
-    TEST_ASSERT_EQ(pal_path_exists(debug_path), 0);
-    TEST_ASSERT_EQ(pal_path_exists(release_path), 0);
-
-    // Clear the cache
-    rc = cache_clear(&config);
-    TEST_ASSERT_EQ(rc, 0);
-
-    // Both mtime index files should be deleted
-    TEST_ASSERT(pal_path_exists(debug_path) != 0);
-    TEST_ASSERT(pal_path_exists(release_path) != 0);
-
-    pal_rmdir_r(root);
-    return 0;
-}
 
 TEST_SERIAL(cache_clear_no_index_files_succeeds) {
     // cache_clear should succeed even when there are no mtime index files
@@ -322,7 +220,7 @@ TEST_SERIAL(cache_clear_no_index_files_succeeds) {
     CacheConfig config;
     setup_cache_with_objects(root, &config);
 
-    // No mtime index files created — just clear the cache
+    // Just clear the cache
     int rc = cache_clear(&config);
     TEST_ASSERT_EQ(rc, 0);
 

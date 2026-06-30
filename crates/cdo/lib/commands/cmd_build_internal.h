@@ -114,62 +114,6 @@ int build_legacy_crate(const LegacyBuildCtx* ctx);
 // Module build functions (split across cmd_build_*.c)
 // ---------------------------------------------------------------------------
 
-/// Build the Shared_Library_Module for a crate.
-int build_shared_library_module(const Workspace* ws, Crate* crate,
-                                const CompilerInfo* compiler,
-                                const char* profile,
-                                const BuildProfile* build_prof,
-                                int jobs,
-                                const char** coverage_flags,
-                                int coverage_flag_count,
-                                const CacheConfig* cache_config,
-                                CacheStats* cache_stats,
-                                bool no_cache,
-                                CliProgressBar* progress,
-                                int* completed_units);
-
-/// Build the Library_Module for a crate.
-int build_library_module(const Workspace* ws, Crate* crate,
-                         const CompilerInfo* compiler,
-                         const char* profile,
-                         const BuildProfile* build_prof,
-                         int jobs,
-                         const char** coverage_flags,
-                         int coverage_flag_count,
-                         const CacheConfig* cache_config,
-                         CacheStats* cache_stats,
-                         bool no_cache,
-                         CliProgressBar* progress,
-                         int* completed_units);
-
-/// Build the Executable_Module for a crate.
-int build_executable_module(const Workspace* ws, Crate* crate,
-                            const CompilerInfo* compiler,
-                            const char* profile,
-                            const BuildProfile* build_prof,
-                            int jobs,
-                            const char** coverage_flags,
-                            int coverage_flag_count,
-                            const CacheConfig* cache_config,
-                            CacheStats* cache_stats,
-                            bool no_cache,
-                            CliProgressBar* progress,
-                            int* completed_units);
-
-/// Build the Test_Module for a crate.
-int build_test_module(const Workspace* ws, Crate* crate,
-                      const CompilerInfo* compiler,
-                      const char* profile,
-                      const BuildProfile* build_prof,
-                      int jobs,
-                      const char** coverage_flags,
-                      int coverage_flag_count,
-                      const CacheConfig* cache_config,
-                      CacheStats* cache_stats,
-                      bool no_cache,
-                      CliProgressBar* progress,
-                      int* completed_units);
-
 /// Build (copy) the Resource_Module for a crate.
 /// Performs incremental copy from res/ to build/<profile>/<crate>/res/.
 /// Removes stale files not present in source.

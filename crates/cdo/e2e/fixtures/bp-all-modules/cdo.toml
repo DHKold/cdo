@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/full"]
+
+[workspace.settings]
+c-standard = 17
+
+[workspace.profiles.debug]
+optimize = false
+debug = true
+defines = ["DEBUG"]
+
+[workspace.profiles.release]
+optimize = true
+debug = false
+defines = ["NDEBUG"]

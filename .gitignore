@@ -1,5 +1,5 @@
 # Build outputs
-build/
+/build
 
 # cdo local data (vendored tools, download cache)
 .cdo

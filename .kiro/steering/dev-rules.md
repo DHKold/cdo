@@ -18,10 +18,15 @@
     - Group functions by domain (File System Utils > File Reading, Structured Data > Json Parser, etc.), not by feature / command
     - Ensure the function handles all cases (including errors, edge cases, etc.) properly
 - Never use stubs, TODO or temporary code
-- Prefer TDD (Test Driven Development): write the interfaces first, then the unit tests, then the implementation.
+- Prefer TDD (Test Driven Development):
+    1. Write the interfaces
+    2. Write the unit tests (Don't compile/run them yet, don't stub/mock the implementation)
+    3. Write the implementation
+    4. Run the unit tests
 - No PBT (Property Based Testing). Use extensive unit testing targeting >90% line coverage on all touched source files.
 - Maintain the README.md up to date and aligned with the state of the code.
 - If you see that two functions can be merged as a generic one, evaluate if it would make the code clearer and more readable
+- In case an unforeseen design issue is discovered, ask the user for precisions
 
 ## Building & Testing
 

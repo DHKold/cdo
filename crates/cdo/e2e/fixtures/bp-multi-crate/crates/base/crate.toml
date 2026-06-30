@@ -1,0 +1,3 @@
+[crate]
+name = "base"
+c-standard = 17

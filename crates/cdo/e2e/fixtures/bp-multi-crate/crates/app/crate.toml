@@ -1,0 +1,6 @@
+[crate]
+name = "app"
+c-standard = 17
+
+[dependencies]
+base = {}

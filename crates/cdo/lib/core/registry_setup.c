@@ -48,6 +48,8 @@ static const int s_global_option_count = sizeof(s_global_options) / sizeof(s_glo
 
 static const CliArgSpec s_build_options[] = {
     { .long_name = "no-cache", .short_name = 0, .type = CLI_ARG_BOOL, .description = "Disable build cache lookup and population" },
+    { .long_name = "force",    .short_name = 0, .type = CLI_ARG_BOOL, .description = "Force rebuild all targets even if up-to-date" },
+    { .long_name = "clean",    .short_name = 0, .type = CLI_ARG_BOOL, .description = "Delete build directory and rebuild from scratch" },
 };
 
 static const CliArgSpec s_test_options[] = {
@@ -177,7 +179,7 @@ CliCmdRegistry* cdo_registry_create(void) {
     }
 
     /* Merge args for each command */
-    int build_arg_count   = merge_args(s_build_args,   s_build_options, 1);
+    int build_arg_count   = merge_args(s_build_args,   s_build_options, 3);
     int run_arg_count     = merge_args(s_run_args,     NULL, 0);
     int test_arg_count    = merge_args(s_test_args,    s_test_options, 3);
     int clean_arg_count   = merge_args(s_clean_args,   s_clean_options, 1);

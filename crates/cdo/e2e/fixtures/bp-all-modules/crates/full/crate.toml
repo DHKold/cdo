@@ -1,0 +1,3 @@
+[crate]
+name = "full"
+c-standard = 17

@@ -1,8 +1,6 @@
 #include "compiler_internal.h"
 #include "core/compiler.h"
 #include "core/cache.h"
-#include "core/cache_threshold.h"
-#include "core/cache_hash_parallel.h"
 #include "commons/threadpool.h"
 #include "pal/pal.h"
 #include "core/log.h"
@@ -438,7 +436,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         }
 
         // --- Phase 1: Threshold filter ---
-        // Identify files below threshold -> compile directly without cache (Req 2.2, 2.3, 6.2)
+        // Files below threshold bypass cache (compile directly without hashing)
         bool* below_threshold = (bool*)calloc((size_t)job_count, sizeof(bool));
         if (!below_threshold) {
             cdo_log_error("Failed to allocate threshold tracking array");
@@ -448,16 +446,15 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
             return -1;
         }
 
-        int hash_eligible_count = 0;
         for (int i = 0; i < job_count; i++) {
             int64_t src_size = get_source_file_size(jobs[i].source_path);
-            if (cache_threshold_skip(src_size, cache_config)) {
+            bool skip_threshold = (cache_config->min_file_size > 0 && src_size >= 0 && src_size < cache_config->min_file_size);
+            if (skip_threshold) {
                 below_threshold[i] = true;
                 cache_stats->skipped++;
 
                 // For threshold-skipped files, check if the object is already up-to-date
-                // (source mtime <= object mtime). If so, skip compilation entirely to avoid
-                // generating a fresh object that would trigger unnecessary re-linking.
+                // (source mtime <= object mtime). If so, skip compilation entirely.
                 uint64_t src_mtime = 0, obj_mtime = 0;
                 if (pal_file_mtime(jobs[i].source_path, &src_mtime) == 0 &&
                     pal_file_mtime(jobs[i].object_path, &obj_mtime) == 0 &&
@@ -467,24 +464,21 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
                 }
 
                 miss_indices[miss_count++] = i;
-                // key_valid[slot] stays false -> no cache store after compilation
                 cdo_log_trace("Cache threshold skip: %s (%lld bytes < %lld threshold)", jobs[i].source_path, (long long)src_size, (long long)cache_config->min_file_size);
-            } else {
-                hash_eligible_count++;
             }
         }
 
-        // --- Phase 2: Build CacheKeyInputs for hash-eligible files ---
-        HashResultSlot* hash_results = cache_hash_results_alloc(job_count);
-        HashJobCtx* hash_jobs = cache_hash_jobs_alloc(job_count);
+        // --- Phase 2: Compute cache keys serially for hash-eligible files ---
         char (*dep_paths)[280] = (char (*)[280])calloc((size_t)job_count, 280);
+        char (*computed_keys)[CACHE_KEY_HEX_LEN + 1] = (char (*)[CACHE_KEY_HEX_LEN + 1])calloc((size_t)job_count, CACHE_KEY_HEX_LEN + 1);
+        bool* key_computed = (bool*)calloc((size_t)job_count, sizeof(bool));
 
-        if (!hash_results || !hash_jobs || !dep_paths) {
-            cdo_log_error("Failed to allocate parallel hash structures");
+        if (!dep_paths || !computed_keys || !key_computed) {
+            cdo_log_error("Failed to allocate cache key structures");
             free(below_threshold);
-            free(hash_results);
-            free(hash_jobs);
             free(dep_paths);
+            free(computed_keys);
+            free(key_computed);
             free(miss_indices);
             free(cache_keys);
             free(key_valid);
@@ -492,8 +486,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         }
 
         for (int i = 0; i < job_count; i++) {
-            hash_results[i].job_index = i;
-            if (below_threshold[i]) continue;  // Skip threshold-excluded files
+            if (below_threshold[i]) continue;
 
             const CompileJob* job = &jobs[i];
 
@@ -515,49 +508,30 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
             // Determine language standard
             const char* lang_std = is_cpp_source(job->source_path) ? job->cpp_standard : job->c_standard;
 
-            // Build CacheKeyInputs for this job
-            hash_jobs[i].inputs.source_path = job->source_path;
-            hash_jobs[i].inputs.compiler_path = info->path;
-            hash_jobs[i].inputs.compiler_version = info->version;
-            hash_jobs[i].inputs.language_standard = lang_std;
-            hash_jobs[i].inputs.optimize = job->optimize;
-            hash_jobs[i].inputs.debug_info = job->debug_info;
-            hash_jobs[i].inputs.defines = job->defines;
-            hash_jobs[i].inputs.define_count = job->define_count;
-            hash_jobs[i].inputs.include_paths = job->include_paths;
-            hash_jobs[i].inputs.include_path_count = job->include_path_count;
-            hash_jobs[i].inputs.dep_file_path = (dep_paths[i][0] != '\0') ? dep_paths[i] : NULL;
-            hash_jobs[i].result = &hash_results[i];
-        }
+            // Build CacheKeyInputs and compute key
+            CacheKeyInputs inputs = {0};
+            inputs.source_path = job->source_path;
+            inputs.compiler_path = info->path;
+            inputs.compiler_version = info->version;
+            inputs.language_standard = lang_std;
+            inputs.optimize = job->optimize;
+            inputs.debug_info = job->debug_info;
+            inputs.defines = job->defines;
+            inputs.define_count = job->define_count;
+            inputs.include_paths = job->include_paths;
+            inputs.include_path_count = job->include_path_count;
+            inputs.dep_file_path = (dep_paths[i][0] != '\0') ? dep_paths[i] : NULL;
 
-        // --- Phase 3: Parallel hash dispatch (Req 8.1, 8.2, 8.4, 8.5, 8.6) ---
-        // Use thread pool for parallel SHA-256 computation when parallelism > 1
-        ThreadPool* hash_pool = NULL;
-        if (parallelism > 1 && hash_eligible_count > 0) {
-            hash_pool = threadpool_create(parallelism);
-            if (!hash_pool) {
-                cdo_log_warn("Failed to create thread pool for parallel hashing, falling back to serial");
+            if (cache_compute_key(&inputs, computed_keys[i]) == 0) {
+                key_computed[i] = true;
             }
         }
 
-        // Dispatch: pool=NULL triggers serial fallback inside the function
-        if (hash_eligible_count > 0) {
-            int hash_rc = cache_parallel_hash_dispatch(hash_pool, hash_jobs, job_count, hash_results);
-            if (hash_rc != 0) {
-                cdo_log_warn("Parallel hash dispatch returned error, some keys may be invalid");
-            }
-        }
-
-        if (hash_pool) {
-            threadpool_destroy(hash_pool);
-            hash_pool = NULL;
-        }
-
-        // --- Phase 4: Partition into cache-hit/miss sets (Req 8.4) ---
+        // --- Phase 3: Partition into cache-hit/miss sets ---
         for (int i = 0; i < job_count; i++) {
-            if (below_threshold[i]) continue;  // Already in miss list from phase 1
+            if (below_threshold[i]) continue;
 
-            if (!hash_results[i].valid) {
+            if (!key_computed[i]) {
                 // Key computation failed (e.g., no dep file on first build) -> treat as miss
                 miss_indices[miss_count++] = i;
                 cache_stats->misses++;
@@ -566,7 +540,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
             }
 
             // Try cache lookup with the computed key
-            int lookup_rc = cache_lookup(cache_config, hash_results[i].key, jobs[i].object_path);
+            int lookup_rc = cache_lookup(cache_config, computed_keys[i], jobs[i].object_path);
             if (lookup_rc == 0) {
                 // Cache hit -- object was copied to dest
                 cache_stats->hits++;
@@ -575,7 +549,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
                 // Cache miss -- needs compilation; store key for post-compile store
                 int slot = miss_count;
                 miss_indices[miss_count++] = i;
-                memcpy(cache_keys[slot], hash_results[i].key, CACHE_KEY_HEX_LEN + 1);
+                memcpy(cache_keys[slot], computed_keys[i], CACHE_KEY_HEX_LEN + 1);
                 key_valid[slot] = true;
                 cache_stats->misses++;
                 cdo_log_trace("Cache miss: %s", jobs[i].source_path);
@@ -583,9 +557,9 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         }
 
         free(below_threshold);
-        free(hash_results);
-        free(hash_jobs);
         free(dep_paths);
+        free(computed_keys);
+        free(key_computed);
 
         // If all jobs were cache hits, we're done
         if (miss_count == 0) {
