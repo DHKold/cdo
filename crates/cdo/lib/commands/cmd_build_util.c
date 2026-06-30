@@ -1,6 +1,6 @@
 #include "cmd_build_internal.h"
 #include "commons/toml.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -57,7 +57,7 @@ int build_profile_load(const char* ws_root, const char* profile_name,
     char* buf = NULL;
     size_t buf_len = 0;
     if (pal_file_read(manifest_path, &buf, &buf_len) != 0) {
-        // No cdo.toml found — use built-in defaults (not an error for profile loading)
+        // No cdo.toml found â€” use built-in defaults (not an error for profile loading)
         out->loaded = false;
         return 0;
     }
@@ -67,7 +67,7 @@ int build_profile_load(const char* ws_root, const char* profile_name,
     if (toml_parse(buf, buf_len, &root, &err) != 0) {
         free(buf);
         out->loaded = false;
-        return 0; // Parse error — use defaults silently
+        return 0; // Parse error â€” use defaults silently
     }
     free(buf);
 
@@ -78,7 +78,7 @@ int build_profile_load(const char* ws_root, const char* profile_name,
     const TomlValue* profile_val = toml_get(root, key_path);
     if (!profile_val || (profile_val->type != TOML_TABLE &&
                          profile_val->type != TOML_INLINE_TABLE)) {
-        // Profile not defined in manifest — keep built-in defaults
+        // Profile not defined in manifest â€” keep built-in defaults
         toml_free(root);
         out->loaded = false;
         return 0;
@@ -102,7 +102,7 @@ int build_profile_load(const char* ws_root, const char* profile_name,
         out->debug_info = dbg_val->as.boolean;
     }
 
-    // Read "defines" (array of strings) — overrides defaults
+    // Read "defines" (array of strings) â€” overrides defaults
     char def_key[160];
     snprintf(def_key, sizeof(def_key), "%s.defines", key_path);
     const TomlValue* def_val = toml_get(root, def_key);
@@ -124,7 +124,7 @@ int build_profile_load(const char* ws_root, const char* profile_name,
         }
     }
 
-    // Read "flags" (array of strings) — extra compiler flags
+    // Read "flags" (array of strings) â€” extra compiler flags
     char flags_key[160];
     snprintf(flags_key, sizeof(flags_key), "%s.flags", key_path);
     const TomlValue* flags_val = toml_get(root, flags_key);
@@ -221,9 +221,9 @@ void object_path_from_source(const char* source, const char* build_dir,
 // Misc utilities
 // ---------------------------------------------------------------------------
 
-int resolve_jobs(const CdoOptions* opts) {
-    if (opts->jobs > 0) {
-        return opts->jobs;
+int resolve_jobs_raw(int jobs_value) {
+    if (jobs_value > 0) {
+        return jobs_value;
     }
     int cpus = pal_cpu_count();
     return (cpus > 0) ? cpus : 1;
@@ -237,7 +237,7 @@ int deploy_catalog_files(const char* ws_root, const char* build_dir) {
 
     /* Check if workspace has a catalogs/ directory */
     if (pal_path_exists(src_dir) != 0) {
-        return 0; /* No catalogs to deploy — not an error */
+        return 0; /* No catalogs to deploy â€” not an error */
     }
 
     /* Create destination catalogs/ directory */
@@ -259,13 +259,13 @@ int deploy_catalog_files(const char* ws_root, const char* build_dir) {
         }
 
         if (pal_path_exists(src_path) != 0) {
-            continue; /* File doesn't exist — skip */
+            continue; /* File doesn't exist â€” skip */
         }
 
         char* buf = NULL;
         size_t buf_len = 0;
         if (pal_file_read(src_path, &buf, &buf_len) != 0) {
-            cdo_warn("failed to read catalog file '%s' for deployment", src_path);
+            cdo_log_warn("failed to read catalog file '%s' for deployment", src_path);
             continue;
         }
 
@@ -276,7 +276,7 @@ int deploy_catalog_files(const char* ws_root, const char* build_dir) {
         }
 
         if (pal_file_write(dest_path, buf, buf_len) != 0) {
-            cdo_warn("failed to write catalog file '%s'", dest_path);
+            cdo_log_warn("failed to write catalog file '%s'", dest_path);
             free(buf);
             continue;
         }

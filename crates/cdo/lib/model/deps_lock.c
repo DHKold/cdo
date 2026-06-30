@@ -1,5 +1,5 @@
 #include "model/deps.h"
-#include "commons/output.h"
+#include "core/log.h"
 #include "commons/toml.h"
 #include "pal/pal.h"
 
@@ -151,11 +151,11 @@ int dep_lock_read(const char* lock_path, DepSpec** specs, int* count)
     free(file_buf);
     if (rc != 0) return -1;
 
-    /* Look for "package" key — should be an array of tables */
+    /* Look for "package" key â€” should be an array of tables */
     const TomlValue* pkg_val = toml_get(root, "package");
     if (!pkg_val || pkg_val->type != TOML_ARRAY) {
         toml_free(root);
-        /* No packages — not an error */
+        /* No packages â€” not an error */
         return 0;
     }
 

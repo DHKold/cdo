@@ -3,7 +3,8 @@
 
 #include "commands/cmd_deps.h"
 #include "core/catalog.h"
-#include "core/cli.h"
+#include "core/cli_arg_access.h"
+#include "core/handler_ctx.h"
 #include "model/deps.h"
 #include "commons/toml.h"
 
@@ -48,19 +49,6 @@ int cmd_deps_collect_dep_specs(const TomlTable* deps, DepSpec** out_specs, int* 
 
 /// Regenerate the lock file from the current dependencies table.
 int cmd_deps_regenerate_lock(const TomlTable* deps);
-
-/* -------------------------------------------------------------------------- */
-/* Subcommand entry points (defined in respective cmd_deps_*.c files)          */
-/* -------------------------------------------------------------------------- */
-
-/// The deps add subcommand implementation.
-int deps_add(const CdoOptions* opts);
-
-/// The deps remove subcommand implementation.
-int deps_remove(const CdoOptions* opts);
-
-/// The deps list subcommand implementation.
-int deps_list(const CdoOptions* opts);
 
 #ifdef __cplusplus
 }

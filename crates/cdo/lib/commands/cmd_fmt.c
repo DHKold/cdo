@@ -1,12 +1,14 @@
 /**
- * cmd_fmt — Format source files.
+ * cmd_fmt â€” Format source files.
  *
- * Implements source file discovery for the fmt command. The full cmd_fmt
- * entry point (orchestrator) is built in a later task.
+ * Implements source file discovery and the fmt command entry point.
+ * The handler reads --check (bool), --verbose, --quiet, and positional crate
+ * names from CliParseResult.
  */
 
 #include "commands/cmd_fmt.h"
-#include "core/output.h"
+#include "core/handler_ctx.h"
+#include "core/log.h"
 #include "model/workspace.h"
 #include "model/fmt_settings.h"
 #include "pal/pal.h"
@@ -14,6 +16,26 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+
+// ---------------------------------------------------------------------------
+// Argument extraction helpers (match main_new.cpp pattern)
+// ---------------------------------------------------------------------------
+
+/// Find a named argument in the parse result. Returns NULL if not found.
+static const CliArgValue* fmt_find_arg(const CliParseResult* result, const char* name) {
+    for (int i = 0; i < result->arg_value_count; i++) {
+        if (result->arg_values[i].name && strcmp(result->arg_values[i].name, name) == 0) {
+            return &result->arg_values[i];
+        }
+    }
+    return NULL;
+}
+
+/// Get a bool argument value. Returns false if not present.
+static bool fmt_get_arg_bool(const CliParseResult* result, const char* name) {
+    const CliArgValue* v = fmt_find_arg(result, name);
+    return (v && v->present && v->type == CLI_ARG_BOOL) ? v->value.bool_val : false;
+}
 
 // ---------------------------------------------------------------------------
 // Glob pattern matching (supports *, **, and ? wildcards)
@@ -168,7 +190,7 @@ static void fmt_walk_callback(const char* entry_path, bool is_dir, void* ctx) {
     for (int i = 0; i < dc->settings->exclude_count; i++) {
         if (fmt_glob_match(dc->settings->exclude_patterns[i], rel_path)) {
             if (dc->verbose) {
-                cdo_debug("Excluding: %s (pattern: %s)", rel_path, dc->settings->exclude_patterns[i]);
+                cdo_log_debug("Excluding: %s (pattern: %s)", rel_path, dc->settings->exclude_patterns[i]);
             }
             return;
         }
@@ -225,7 +247,7 @@ int fmt_discover_sources(const Workspace* ws, const Crate** crates, int crate_co
         // Compute absolute path: ws_root + "/" + crate->path
         char crate_path[260];
         if (pal_path_join(crate_path, sizeof(crate_path), ws_root, crate->path) != 0) {
-            cdo_error("fmt: crate path too long: %s/%s", ws_root, crate->path);
+            cdo_log_error("fmt: crate path too long: %s/%s", ws_root, crate->path);
             continue;
         }
         pal_path_normalize(crate_path);
@@ -242,7 +264,7 @@ int fmt_discover_sources(const Workspace* ws, const Crate** crates, int crate_co
         // Walk the crate directory recursively
         int rc = pal_dir_walk(crate_path, fmt_walk_callback, &ctx);
         if (rc != PAL_OK && rc != PAL_ERR_NOT_FOUND) {
-            cdo_debug("fmt: failed to walk crate directory: %s (rc=%d)", crate_path, rc);
+            cdo_log_debug("fmt: failed to walk crate directory: %s (rc=%d)", crate_path, rc);
         }
     }
 
@@ -265,7 +287,7 @@ int fmt_find_formatter(const char* ws_root, const FmtSettings* settings, char* o
                 return 0;
             }
         }
-        cdo_error("configured formatter not found: %s", settings->tool_path);
+        cdo_log_error("configured formatter not found: %s", settings->tool_path);
         return 1;
     }
 
@@ -309,7 +331,7 @@ int fmt_find_formatter(const char* ws_root, const FmtSettings* settings, char* o
     }
 
     // 4. Not found anywhere
-    cdo_error("clang-format not found. Install with: cdo tool install clang-format");
+    cdo_log_error("clang-format not found. Install with: cdo tool install clang-format");
     return 1;
 }
 
@@ -360,12 +382,12 @@ static void fmt_report_errors(const char* stderr_buf, char (*files)[260], int fi
     // Report each file that appears in stderr
     for (int i = 0; i < file_count; i++) {
         if (strstr(stderr_buf, files[i]) != NULL) {
-            cdo_error("  %s: formatter error", files[i]);
+            cdo_log_error("  %s: formatter error", files[i]);
         }
     }
 
     // Also log the raw stderr for debugging
-    cdo_debug("Formatter stderr: %s", stderr_buf);
+    cdo_log_debug("Formatter stderr: %s", stderr_buf);
 }
 
 int fmt_invoke(const char* formatter_path, const FmtSettings* settings, char (*files)[260], int file_count, bool check_mode, FmtInvokeResult* result) {
@@ -427,7 +449,7 @@ int fmt_invoke(const char* formatter_path, const FmtSettings* settings, char (*f
         int total_args = base_arg_count + batch_count;
         const char** args = (const char**)malloc((size_t)total_args * sizeof(const char*));
         if (!args) {
-            cdo_error("fmt: out of memory building argument list");
+            cdo_log_error("fmt: out of memory building argument list");
             result->errored += batch_count;
             overall_rc = 1;
             continue;
@@ -454,12 +476,12 @@ int fmt_invoke(const char* formatter_path, const FmtSettings* settings, char (*f
         PalSpawnResult spawn_result;
         memset(&spawn_result, 0, sizeof(spawn_result));
 
-        cdo_debug("fmt: invoking %s on %d files (batch at index %d)", formatter_path, batch_count, batch_start);
+        cdo_log_debug("fmt: invoking %s on %d files (batch at index %d)", formatter_path, batch_count, batch_start);
 
         int rc = pal_spawn(&opts, &spawn_result);
 
         if (rc != PAL_OK) {
-            cdo_error("fmt: failed to spawn formatter: %s (error %d)", formatter_path, rc);
+            cdo_log_error("fmt: failed to spawn formatter: %s (error %d)", formatter_path, rc);
             result->errored += batch_count;
             overall_rc = 1;
             free(args);
@@ -492,19 +514,19 @@ int fmt_invoke(const char* formatter_path, const FmtSettings* settings, char (*f
                     // Log individual nonconformant files from stderr
                     for (int i = 0; i < batch_count; i++) {
                         if (strstr(spawn_result.stderr_buf, files[batch_start + i]) != NULL) {
-                            cdo_info("  %s", files[batch_start + i]);
+                            cdo_log_info("  %s", files[batch_start + i]);
                         }
                     }
                 } else {
-                    // No stderr detail — report all files in batch
+                    // No stderr detail â€” report all files in batch
                     for (int i = 0; i < batch_count; i++) {
-                        cdo_info("  %s", files[batch_start + i]);
+                        cdo_log_info("  %s", files[batch_start + i]);
                     }
                 }
                 overall_rc = 1;
             } else {
                 // In normal mode, non-zero means formatter error
-                cdo_error("fmt: formatter returned error (exit code %d)", spawn_result.exit_code);
+                cdo_log_error("fmt: formatter returned error (exit code %d)", spawn_result.exit_code);
                 fmt_report_errors(spawn_result.stderr_buf, &files[batch_start], batch_count);
                 result->errored += batch_count;
                 overall_rc = 1;
@@ -519,38 +541,27 @@ int fmt_invoke(const char* formatter_path, const FmtSettings* settings, char (*f
 }
 
 // ---------------------------------------------------------------------------
-// cmd_fmt entry point (orchestrator)
+// cmd_fmt entry point (new CLI framework handler)
 // ---------------------------------------------------------------------------
 
-int cmd_fmt(const CdoOptions* opts) {
-    if (!opts) {
-        cdo_error("internal error: NULL options passed to fmt command");
+int cmd_fmt(const CliParseResult* result, void* ctx) {
+    (void)ctx; // CdoHandlerCtx* â€” not used directly yet (output goes through global)
+
+    if (!result) {
+        cdo_log_error("internal error: NULL parse result passed to fmt command");
         return 1;
     }
 
-    // Handle --help
-    if (opts->help) {
-        cdo_info("Usage: cdo fmt [OPTIONS] [crate_name...]");
-        cdo_info("  Format C/C++ source files using clang-format.");
-        cdo_info("  If no crate name is given, all workspace crates are formatted.");
-        cdo_info("");
-        cdo_info("Options:");
-        cdo_info("  --check     Dry-run mode: report non-conformant files without modifying them");
-        cdo_info("  --verbose   Log each file processed and formatter details");
-        cdo_info("  --quiet     Suppress summary output");
-        cdo_info("");
-        cdo_info("Examples:");
-        cdo_info("  cdo fmt              Format all source files in the workspace");
-        cdo_info("  cdo fmt mylib        Format only the 'mylib' crate");
-        cdo_info("  cdo fmt --check      Verify formatting without changes (CI mode)");
-        return 0;
-    }
+    // Extract args from CliParseResult
+    bool check_mode = fmt_get_arg_bool(result, "check");
+    bool verbose = fmt_get_arg_bool(result, "verbose");
+    bool quiet = fmt_get_arg_bool(result, "quiet");
 
     // --- Step 1: Load workspace ---
     Workspace ws = {0};
     int rc = workspace_load(".", &ws);
     if (rc != 0) {
-        cdo_error("failed to load workspace");
+        cdo_log_error("failed to load workspace");
         return 1;
     }
 
@@ -558,12 +569,12 @@ int cmd_fmt(const CdoOptions* opts) {
     const Crate* target_crates[64];
     int target_count = 0;
 
-    if (opts->positional_count > 0) {
+    if (result->positional_count > 0) {
         // Format specific crates
-        for (int i = 0; i < opts->positional_count; i++) {
+        for (int i = 0; i < result->positional_count; i++) {
             bool found = false;
             for (int j = 0; j < ws.crate_count; j++) {
-                if (strcmp(ws.crates[j].name, opts->positional_args[i]) == 0) {
+                if (strcmp(ws.crates[j].name, result->positional_values[i]) == 0) {
                     if (target_count < 64) {
                         target_crates[target_count++] = &ws.crates[j];
                     }
@@ -572,7 +583,7 @@ int cmd_fmt(const CdoOptions* opts) {
                 }
             }
             if (!found) {
-                cdo_error("unknown crate: '%s'", opts->positional_args[i]);
+                cdo_log_error("unknown crate: '%s'", result->positional_values[i]);
                 workspace_free(&ws);
                 return 1;
             }
@@ -589,11 +600,11 @@ int cmd_fmt(const CdoOptions* opts) {
 
     // --- Step 4: Discover source files ---
     static char files[4096][260];
-    int file_count = fmt_discover_sources(&ws, target_crates, target_count, settings, opts->verbose, files, 4096);
+    int file_count = fmt_discover_sources(&ws, target_crates, target_count, settings, verbose, files, 4096);
 
     if (file_count == 0) {
-        if (!opts->quiet) {
-            cdo_info("No source files found.");
+        if (!quiet) {
+            cdo_log_info("No source files found.");
         }
         workspace_free(&ws);
         return 0;
@@ -608,28 +619,28 @@ int cmd_fmt(const CdoOptions* opts) {
     }
 
     // Verbose: log formatter and file count
-    if (opts->verbose) {
-        cdo_debug("Formatter: %s", formatter_path);
-        cdo_debug("Files to process: %d", file_count);
+    if (verbose) {
+        cdo_log_debug("Formatter: %s", formatter_path);
+        cdo_log_debug("Files to process: %d", file_count);
     }
 
     // --- Step 6: Invoke formatter ---
-    FmtInvokeResult result = {0};
-    rc = fmt_invoke(formatter_path, settings, files, file_count, opts->check, &result);
+    FmtInvokeResult fmt_result = {0};
+    rc = fmt_invoke(formatter_path, settings, files, file_count, check_mode, &fmt_result);
 
     // --- Step 7: Print summary and determine exit code ---
-    if (!opts->quiet) {
-        if (opts->check) {
-            if (result.nonconformant == 0) {
-                cdo_info("All %d files formatted correctly", result.conformant);
+    if (!quiet) {
+        if (check_mode) {
+            if (fmt_result.nonconformant == 0) {
+                cdo_log_info("All %d files formatted correctly", fmt_result.conformant);
             } else {
-                cdo_info("%d files would be reformatted", result.nonconformant);
+                cdo_log_info("%d files would be reformatted", fmt_result.nonconformant);
             }
         } else {
-            if (result.formatted == 0 && result.errored == 0) {
-                cdo_info("All %d files already formatted correctly", file_count);
+            if (fmt_result.formatted == 0 && fmt_result.errored == 0) {
+                cdo_log_info("All %d files already formatted correctly", file_count);
             } else {
-                cdo_info("Formatted %d files (%d already conformant)", result.formatted, result.conformant);
+                cdo_log_info("Formatted %d files (%d already conformant)", fmt_result.formatted, fmt_result.conformant);
             }
         }
     }
@@ -637,10 +648,13 @@ int cmd_fmt(const CdoOptions* opts) {
     workspace_free(&ws);
 
     // Exit codes:
-    // - Any errors → exit 1
-    // - Check mode with nonconformant files → exit 1
-    // - Otherwise → exit 0
-    if (result.errored > 0) return 1;
-    if (opts->check && result.nonconformant > 0) return 1;
+    // - Any errors -> exit 1
+    // - Check mode with nonconformant files -> exit 1
+    // - Otherwise -> exit 0
+    if (fmt_result.errored > 0) return 1;
+    if (check_mode && fmt_result.nonconformant > 0) return 1;
     return 0;
 }
+
+// ---------------------------------------------------------------------------
+// End of cmd_fmt.c

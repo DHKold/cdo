@@ -2,11 +2,17 @@
  * pbt_cli.c - CLI Property-Based Tests
  *
  * Property 8: CLI Suggestion Relevance (Requirements 1.2)
- * Property 9: Global Options Parsing (Requirements 1.3)
+ *
+ * Updated to use the new cdo_cli framework (cli_cmd_suggest via registry)
+ * after the removal of CdoOptions/CdoCommand in task 5.5.
  */
 #include "cdo_ut.h"
 #include "vendor/theft.h"
-#include "core/cli.h"
+#include "cmd/cli_cmd.h"
+#include "core/registry_setup.h"
+
+#include <string.h>
+#include <stdlib.h>
 
 /*============================================================================
  * Property 8: CLI Suggestion Relevance
@@ -15,16 +21,18 @@
 static const char *KNOWN_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
     "tool", "doctor",
-    "deps", "catalog", "help",
+    "deps", "fmt", "catalog", "cache", "hook", "help",
+    "install", "uninstall", "e2e",
 };
-#define KNOWN_COMMAND_COUNT 11
+#define KNOWN_COMMAND_COUNT 17
 
 static const char *SUGGESTABLE_COMMANDS[] = {
     "build", "run", "test", "clean", "new", "init",
     "tool", "doctor",
-    "deps", "catalog",
+    "deps", "fmt", "catalog", "cache", "hook",
+    "install", "uninstall", "e2e",
 };
-#define SUGGESTABLE_COMMAND_COUNT 10
+#define SUGGESTABLE_COMMAND_COUNT 16
 
 static int cli_suggest_threshold(const char *input) {
     int input_len = (int)strlen(input);
@@ -188,12 +196,17 @@ prop_cli_suggestion_relevance(struct theft *t, void *arg1) {
     const char *input = (const char *)arg1;
     int threshold = cli_suggest_threshold(input);
 
+    // Use the new registry-based suggestion engine
+    CliCmdRegistry* reg = cdo_registry_create();
+    if (!reg) return THEFT_TRIAL_ERROR;
+
     char suggestions[8][32];
-    int count = cdo_cli_suggest(input, suggestions, 8);
+    int count = cli_cmd_suggest(reg, input, suggestions, 8);
 
     for (int i = 0; i < count; i++) {
         if (!is_known_command(suggestions[i])) {
             fprintf(stderr, "  FAIL: suggestion \"%s\" is not a known command\n", suggestions[i]);
+            cli_cmd_registry_destroy(reg);
             return THEFT_TRIAL_FAIL;
         }
     }
@@ -203,6 +216,7 @@ prop_cli_suggestion_relevance(struct theft *t, void *arg1) {
         if (dist > threshold) {
             fprintf(stderr, "  FAIL: suggestion \"%s\" has distance %d > %d from \"%s\"\n",
                     suggestions[i], dist, threshold, input);
+            cli_cmd_registry_destroy(reg);
             return THEFT_TRIAL_FAIL;
         }
     }
@@ -211,9 +225,11 @@ prop_cli_suggestion_relevance(struct theft *t, void *arg1) {
     if (min_dist <= threshold && min_dist > 0 && count == 0) {
         fprintf(stderr, "  FAIL: suggestable command exists within distance %d of \"%s\" "
                 "(threshold=%d) but no suggestions returned\n", min_dist, input, threshold);
+        cli_cmd_registry_destroy(reg);
         return THEFT_TRIAL_FAIL;
     }
 
+    cli_cmd_registry_destroy(reg);
     return THEFT_TRIAL_PASS;
 }
 
@@ -224,243 +240,6 @@ TEST(prop_cli_suggestion_relevance) {
         .type_info = { &cli_input_type_info },
         .seed = 88888,
         .trials = 500,
-    };
-    enum theft_run_res res = theft_run(&cfg);
-    return (res == THEFT_RUN_PASS) ? 0 : 1;
-}
-
-/*============================================================================
- * Property 9: Global Options Parsing
- *============================================================================*/
-
-typedef struct {
-    int argc;
-    char **argv;
-    char *argv_storage;
-    CdoCommand expected_command;
-    bool       expect_verbose;
-    bool       expect_quiet;
-    bool       expect_help;
-    bool       expect_release;
-    CdoColorMode expected_color;
-    CdoLogLevel  expected_log_level;
-    int          expected_jobs;
-    bool         options_before_command;
-} CliInvocation;
-
-static const struct { const char* name; CdoCommand cmd; } GEN_COMMANDS[] = {
-    { "build",   CDO_CMD_BUILD   },
-    { "run",     CDO_CMD_RUN     },
-    { "test",    CDO_CMD_TEST    },
-    { "clean",   CDO_CMD_CLEAN   },
-    { "new",     CDO_CMD_NEW     },
-    { "init",    CDO_CMD_INIT    },
-    { "shader",  CDO_CMD_SHADER  },
-    { "tool",    CDO_CMD_TOOL    },
-    { "doctor",  CDO_CMD_DOCTOR  },
-};
-#define GEN_COMMAND_COUNT (int)(sizeof(GEN_COMMANDS) / sizeof(GEN_COMMANDS[0]))
-
-static const char* COLOR_VALUES[] = { "auto", "always", "never" };
-static const CdoColorMode COLOR_ENUMS[] = { CDO_COLOR_AUTO, CDO_COLOR_ALWAYS, CDO_COLOR_NEVER };
-
-static const char* LOG_LEVEL_VALUES[] = { "error", "warn", "info", "debug", "trace" };
-static const CdoLogLevel LOG_LEVEL_ENUMS[] = { CDO_LOG_ERROR, CDO_LOG_WARN, CDO_LOG_INFO, CDO_LOG_DEBUG, CDO_LOG_TRACE };
-
-static enum theft_alloc_res
-alloc_cli_invocation(struct theft *t, void *env, void **output) {
-    (void)env;
-
-    CliInvocation *inv = calloc(1, sizeof(CliInvocation));
-    if (!inv) return THEFT_ALLOC_ERROR;
-
-    int cmd_idx = (int)theft_random_choice(t, (uint64_t)GEN_COMMAND_COUNT);
-    const char *cmd_name = GEN_COMMANDS[cmd_idx].name;
-    inv->expected_command = GEN_COMMANDS[cmd_idx].cmd;
-
-    inv->expect_verbose = theft_random_choice(t, 2) != 0;
-    inv->expect_quiet   = theft_random_choice(t, 2) != 0;
-    inv->expect_help    = theft_random_choice(t, 2) != 0;
-    inv->expect_release = theft_random_choice(t, 2) != 0;
-
-    int color_choice = (int)theft_random_choice(t, 4);
-    inv->expected_color = (color_choice == 0) ? CDO_COLOR_AUTO : COLOR_ENUMS[color_choice - 1];
-
-    int log_choice = (int)theft_random_choice(t, 6);
-
-    int jobs_specified = (int)theft_random_choice(t, 2);
-    inv->expected_jobs = jobs_specified ? (int)(theft_random_choice(t, 16) + 1) : 0;
-
-    inv->options_before_command = theft_random_choice(t, 2) != 0;
-
-    #define MAX_CLI_ARGS 16
-    const char *args[MAX_CLI_ARGS];
-    int arg_count = 0;
-    args[arg_count++] = "cdo";
-
-    const char *opts_arr[8];
-    int opt_count = 0;
-    char *color_buf = NULL, *log_buf = NULL, *jobs_buf = NULL;
-
-    if (inv->expect_verbose) opts_arr[opt_count++] = "--verbose";
-    if (inv->expect_quiet)   opts_arr[opt_count++] = "--quiet";
-    if (inv->expect_help)    opts_arr[opt_count++] = "--help";
-    if (inv->expect_release) opts_arr[opt_count++] = "--release";
-
-    if (color_choice > 0) {
-        color_buf = malloc(32);
-        if (!color_buf) { free(inv); return THEFT_ALLOC_ERROR; }
-        snprintf(color_buf, 32, "--color=%s", COLOR_VALUES[color_choice - 1]);
-        opts_arr[opt_count++] = color_buf;
-    }
-
-    if (log_choice > 0) {
-        log_buf = malloc(32);
-        if (!log_buf) { free(color_buf); free(inv); return THEFT_ALLOC_ERROR; }
-        snprintf(log_buf, 32, "--log-level=%s", LOG_LEVEL_VALUES[log_choice - 1]);
-        opts_arr[opt_count++] = log_buf;
-    }
-
-    if (jobs_specified) {
-        jobs_buf = malloc(32);
-        if (!jobs_buf) { free(color_buf); free(log_buf); free(inv); return THEFT_ALLOC_ERROR; }
-        snprintf(jobs_buf, 32, "--jobs=%d", inv->expected_jobs);
-        opts_arr[opt_count++] = jobs_buf;
-    }
-
-    if (inv->expect_quiet) {
-        inv->expected_log_level = CDO_LOG_ERROR;
-    } else if (log_choice > 0) {
-        inv->expected_log_level = LOG_LEVEL_ENUMS[log_choice - 1];
-    } else if (inv->expect_verbose) {
-        inv->expected_log_level = CDO_LOG_DEBUG;
-    } else {
-        inv->expected_log_level = CDO_LOG_INFO;
-    }
-
-    if (inv->options_before_command) {
-        for (int i = 0; i < opt_count; i++) args[arg_count++] = opts_arr[i];
-        args[arg_count++] = cmd_name;
-    } else {
-        args[arg_count++] = cmd_name;
-        for (int i = 0; i < opt_count; i++) args[arg_count++] = opts_arr[i];
-    }
-
-    inv->argc = arg_count;
-    inv->argv = calloc((size_t)(arg_count + 1), sizeof(char*));
-    if (!inv->argv) { free(color_buf); free(log_buf); free(jobs_buf); free(inv); return THEFT_ALLOC_ERROR; }
-
-    size_t total_len = 0;
-    for (int i = 0; i < arg_count; i++) total_len += strlen(args[i]) + 1;
-    inv->argv_storage = malloc(total_len);
-    if (!inv->argv_storage) { free(inv->argv); free(color_buf); free(log_buf); free(jobs_buf); free(inv); return THEFT_ALLOC_ERROR; }
-
-    char *ptr = inv->argv_storage;
-    for (int i = 0; i < arg_count; i++) {
-        size_t slen = strlen(args[i]);
-        memcpy(ptr, args[i], slen + 1);
-        inv->argv[i] = ptr;
-        ptr += slen + 1;
-    }
-    inv->argv[arg_count] = NULL;
-
-    free(color_buf); free(log_buf); free(jobs_buf);
-    *output = inv;
-    return THEFT_ALLOC_OK;
-    #undef MAX_CLI_ARGS
-}
-
-static void free_cli_invocation(void *instance, void *env) {
-    (void)env;
-    CliInvocation *inv = (CliInvocation *)instance;
-    if (inv) { free(inv->argv_storage); free(inv->argv); free(inv); }
-}
-
-static void print_cli_invocation(FILE *f, const void *instance, void *env) {
-    (void)env;
-    const CliInvocation *inv = (const CliInvocation *)instance;
-    fprintf(f, "CliInvocation(argc=%d, opts_%s_cmd): ",
-            inv->argc, inv->options_before_command ? "before" : "after");
-    for (int i = 0; i < inv->argc; i++) {
-        fprintf(f, "%s%s", i > 0 ? " " : "", inv->argv[i]);
-    }
-}
-
-static struct theft_type_info cli_invocation_type_info = {
-    .alloc  = alloc_cli_invocation,
-    .free   = free_cli_invocation,
-    .print  = print_cli_invocation,
-    .hash   = NULL,
-    .shrink = NULL,
-    .env    = NULL,
-};
-
-static enum theft_trial_res
-prop_global_options_parsing(struct theft *t, void *arg1) {
-    (void)t;
-    CliInvocation *inv = (CliInvocation *)arg1;
-
-    CdoOptions parsed_opts;
-    int rc = cdo_cli_parse(inv->argc, inv->argv, &parsed_opts);
-
-    if (rc != 0) {
-        fprintf(stderr, "  cdo_cli_parse returned %d for: ", rc);
-        for (int i = 0; i < inv->argc; i++) fprintf(stderr, "%s ", inv->argv[i]);
-        fprintf(stderr, "\n");
-        return THEFT_TRIAL_FAIL;
-    }
-
-    if (parsed_opts.command != inv->expected_command) {
-        fprintf(stderr, "  Command mismatch: got %d, expected %d\n",
-                parsed_opts.command, inv->expected_command);
-        return THEFT_TRIAL_FAIL;
-    }
-    if (parsed_opts.verbose != inv->expect_verbose) {
-        fprintf(stderr, "  verbose mismatch: got %d, expected %d\n",
-                parsed_opts.verbose, inv->expect_verbose);
-        return THEFT_TRIAL_FAIL;
-    }
-    if (parsed_opts.quiet != inv->expect_quiet) {
-        fprintf(stderr, "  quiet mismatch: got %d, expected %d\n",
-                parsed_opts.quiet, inv->expect_quiet);
-        return THEFT_TRIAL_FAIL;
-    }
-    if (parsed_opts.help != inv->expect_help) {
-        fprintf(stderr, "  help mismatch: got %d, expected %d\n",
-                parsed_opts.help, inv->expect_help);
-        return THEFT_TRIAL_FAIL;
-    }
-    if (parsed_opts.release != inv->expect_release) {
-        fprintf(stderr, "  release mismatch: got %d, expected %d\n",
-                parsed_opts.release, inv->expect_release);
-        return THEFT_TRIAL_FAIL;
-    }
-    if (parsed_opts.color != inv->expected_color) {
-        fprintf(stderr, "  color mismatch: got %d, expected %d\n",
-                parsed_opts.color, inv->expected_color);
-        return THEFT_TRIAL_FAIL;
-    }
-    if (parsed_opts.log_level != inv->expected_log_level) {
-        fprintf(stderr, "  log_level mismatch: got %d, expected %d\n",
-                parsed_opts.log_level, inv->expected_log_level);
-        return THEFT_TRIAL_FAIL;
-    }
-    if (parsed_opts.jobs != inv->expected_jobs) {
-        fprintf(stderr, "  jobs mismatch: got %d, expected %d\n",
-                parsed_opts.jobs, inv->expected_jobs);
-        return THEFT_TRIAL_FAIL;
-    }
-
-    return THEFT_TRIAL_PASS;
-}
-
-TEST(prop_global_options_parsing) {
-    struct theft_run_config cfg = {
-        .name = "global_options_parsing",
-        .prop = { .prop1 = prop_global_options_parsing },
-        .type_info = { &cli_invocation_type_info },
-        .seed = 19830,
-        .trials = 1000,
     };
     enum theft_run_res res = theft_run(&cfg);
     return (res == THEFT_RUN_PASS) ? 0 : 1;

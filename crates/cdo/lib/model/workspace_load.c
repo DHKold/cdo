@@ -3,7 +3,7 @@
 #include "model/scanner.h"
 #include "model/hooks.h"
 #include "commons/toml.h"
-#include "commons/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdbool.h>
@@ -17,7 +17,7 @@
 
 /// Parse a size string with suffix (KB, MB, GB) into bytes.
 /// Supports case-insensitive suffixes. Returns bytes on success, -1 on invalid input.
-/// Examples: "2GB" → 2147483648, "500MB" → 524288000, "100KB" → 102400
+/// Examples: "2GB" â†’ 2147483648, "500MB" â†’ 524288000, "100KB" â†’ 102400
 static int64_t parse_size_string(const char* size_str) {
     if (!size_str || !*size_str) return -1;
 
@@ -158,8 +158,8 @@ static void glob_walk_callback(const char* entry_path, bool is_dir, void* ctx) {
 
 /// Expand a single member pattern (e.g., "crates/*") into actual crate directories.
 /// Supports:
-///   - "path/*" — enumerate immediate subdirectories of "path" that contain crate manifests
-///   - "explicit/path" — a direct path to a crate directory
+///   - "path/*" â€” enumerate immediate subdirectories of "path" that contain crate manifests
+///   - "explicit/path" â€” a direct path to a crate directory
 static int expand_member_pattern(const char* root_path, const char* pattern,
                                  PathList* results) {
     // Build the full path
@@ -221,7 +221,7 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
     size_t len = 0;
 
     if (ws_read_config_file(crate_dir, "crate", &buf, &len) != 0) {
-        cdo_error("Failed to read crate manifest in: %s", crate_dir);
+        cdo_log_error("Failed to read crate manifest in: %s", crate_dir);
         return -1;
     }
 
@@ -229,7 +229,7 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
     TomlTable* root = NULL;
     TomlError err;
     if (toml_parse(buf, len, &root, &err) != 0) {
-        cdo_error("Failed to parse crate manifest in %s: line %d, col %d: %s",
+        cdo_log_error("Failed to parse crate manifest in %s: line %d, col %d: %s",
                   crate_dir, err.line, err.col, err.message);
         free(buf);
         return -1;
@@ -241,6 +241,9 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
     crate->c_standard = default_c_std;
     crate->cpp_standard = default_cpp_std;
     crate->type = CRATE_EXECUTABLE;
+    memcpy(crate->version, "0.0.0", 6);
+    memcpy(crate->resource_base, ".", 2);
+    memcpy(crate->shader_base, ".", 2);
 
     // Compute relative path from workspace root
     size_t root_len = strlen(root_path);
@@ -293,6 +296,41 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
     const TomlValue* cpp_std_val = toml_get(root, "crate.cpp-standard");
     if (cpp_std_val && cpp_std_val->type == TOML_INTEGER) {
         crate->cpp_standard = (int)cpp_std_val->as.integer;
+    }
+
+    // Parse crate.version (optional, defaults to "0.0.0")
+    const TomlValue* version_val = toml_get(root, "crate.version");
+    if (version_val && version_val->type == TOML_STRING && version_val->as.string) {
+        size_t ver_len = strlen(version_val->as.string);
+        if (ver_len >= sizeof(crate->version)) ver_len = sizeof(crate->version) - 1;
+        memcpy(crate->version, version_val->as.string, ver_len);
+        crate->version[ver_len] = '\0';
+        cdo_log_debug("Crate '%s': version = '%s'", crate->name, crate->version);
+    } else {
+        cdo_log_debug("Crate '%s': no version specified, defaulting to '0.0.0'", crate->name);
+    }
+
+    // Parse [install] section (optional, defaults: resource-base=".", shader-base=".")
+    const TomlValue* res_base_val = toml_get(root, "install.resource-base");
+    if (res_base_val && res_base_val->type == TOML_STRING && res_base_val->as.string) {
+        size_t rb_len = strlen(res_base_val->as.string);
+        if (rb_len >= sizeof(crate->resource_base)) rb_len = sizeof(crate->resource_base) - 1;
+        memcpy(crate->resource_base, res_base_val->as.string, rb_len);
+        crate->resource_base[rb_len] = '\0';
+        cdo_log_debug("Crate '%s': install.resource-base = '%s'", crate->name, crate->resource_base);
+    } else {
+        cdo_log_debug("Crate '%s': no install.resource-base specified, defaulting to '.'", crate->name);
+    }
+
+    const TomlValue* shd_base_val = toml_get(root, "install.shader-base");
+    if (shd_base_val && shd_base_val->type == TOML_STRING && shd_base_val->as.string) {
+        size_t sb_len = strlen(shd_base_val->as.string);
+        if (sb_len >= sizeof(crate->shader_base)) sb_len = sizeof(crate->shader_base) - 1;
+        memcpy(crate->shader_base, shd_base_val->as.string, sb_len);
+        crate->shader_base[sb_len] = '\0';
+        cdo_log_debug("Crate '%s': install.shader-base = '%s'", crate->name, crate->shader_base);
+    } else {
+        cdo_log_debug("Crate '%s': no install.shader-base specified, defaulting to '.'", crate->name);
     }
 
     // Parse dependencies (just collect names for now; indices resolved later)
@@ -373,7 +411,7 @@ static int parse_crate_manifest(const char* crate_dir, const char* root_path,
     const TomlValue* hooks_val = toml_get(root, "hooks");
     if (hooks_val && (hooks_val->type == TOML_TABLE || hooks_val->type == TOML_INLINE_TABLE)) {
         if (hooks_parse_table(hooks_val->as.table, &crate->hooks) != 0) {
-            cdo_error("Failed to parse [hooks] in crate '%s'", crate->name);
+            cdo_log_error("Failed to parse [hooks] in crate '%s'", crate->name);
             toml_free(root);
             return -1;
         }
@@ -412,7 +450,7 @@ int workspace_load(const char* root_path, Workspace* ws) {
     char* buf = NULL;
     size_t buf_len = 0;
     if (ws_read_config_file(ws->root_path, "cdo", &buf, &buf_len) != 0) {
-        cdo_error("No workspace manifest found (tried cdo.toml, cdo.yaml, cdo.json) in: %s",
+        cdo_log_error("No workspace manifest found (tried cdo.toml, cdo.yaml, cdo.json) in: %s",
                   ws->root_path);
         return -1;
     }
@@ -421,7 +459,7 @@ int workspace_load(const char* root_path, Workspace* ws) {
     TomlTable* root = NULL;
     TomlError err;
     if (toml_parse(buf, buf_len, &root, &err) != 0) {
-        cdo_error("Failed to parse workspace manifest: line %d, col %d: %s",
+        cdo_log_error("Failed to parse workspace manifest: line %d, col %d: %s",
                   err.line, err.col, err.message);
         free(buf);
         return -1;
@@ -467,7 +505,7 @@ int workspace_load(const char* root_path, Workspace* ws) {
         if (parsed_size > 0) {
             ws->cache_config.max_size_bytes = parsed_size;
         } else {
-            cdo_warn("Invalid cache max-size '%s', using default 2GB", cache_size_val->as.string);
+            cdo_log_warn("Invalid cache max-size '%s', using default 2GB", cache_size_val->as.string);
         }
     }
 
@@ -511,7 +549,7 @@ int workspace_load(const char* root_path, Workspace* ws) {
     const TomlValue* ws_hooks_val = toml_get(root, "workspace.hooks");
     if (ws_hooks_val && (ws_hooks_val->type == TOML_TABLE || ws_hooks_val->type == TOML_INLINE_TABLE)) {
         if (hooks_parse_table(ws_hooks_val->as.table, &ws->ws_hooks) != 0) {
-            cdo_error("Failed to parse [workspace.hooks]");
+            cdo_log_error("Failed to parse [workspace.hooks]");
             toml_free(root);
             return -1;
         }
@@ -522,7 +560,7 @@ int workspace_load(const char* root_path, Workspace* ws) {
     // Extract members array
     const TomlValue* members_val = toml_get(root, "workspace.members");
     if (!members_val || members_val->type != TOML_ARRAY) {
-        cdo_error("Workspace manifest missing [workspace] members array");
+        cdo_log_error("Workspace manifest missing [workspace] members array");
         toml_free(root);
         return -1;
     }
@@ -543,7 +581,7 @@ int workspace_load(const char* root_path, Workspace* ws) {
     toml_free(root);
 
     if (crate_dirs.count == 0) {
-        cdo_warn("No crates discovered in workspace");
+        cdo_log_warn("No crates discovered in workspace");
         pathlist_free(&crate_dirs);
         return 0; // Empty workspace is valid but has no crates
     }
@@ -578,10 +616,10 @@ int workspace_load(const char* root_path, Workspace* ws) {
 
         int scan_result = scanner_scan_modules(crate_abs, &ws->crates[i], NULL, 0);
         if (scan_result != 0) {
-            cdo_warn("Crate '%s': no module directories found (lib/, exe/, dyn/, tst/, api/)",
+            cdo_log_warn("Crate '%s': no module directories found (lib/, exe/, dyn/, tst/, api/)",
                      ws->crates[i].name);
         } else {
-            cdo_debug("Crate '%s': discovered %d module(s)",
+            cdo_log_debug("Crate '%s': discovered %d module(s)",
                       ws->crates[i].name, ws->crates[i].module_count);
         }
     }
@@ -591,7 +629,7 @@ int workspace_load(const char* root_path, Workspace* ws) {
 
     // Validate inter-crate module dependencies
     if (workspace_resolve_module_deps(ws) != 0) {
-        // Non-fatal at load time: errors have been reported via cdo_error().
+        // Non-fatal at load time: errors have been reported via cdo_log_error().
     }
 
     return 0;

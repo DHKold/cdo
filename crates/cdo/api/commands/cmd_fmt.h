@@ -1,7 +1,7 @@
 #ifndef CDO_COMMANDS_CMD_FMT_H
 #define CDO_COMMANDS_CMD_FMT_H
 
-#include "core/cli.h"
+#include "cmd/cli_cmd.h"
 #include "model/workspace.h"
 #include "model/fmt_settings.h"
 
@@ -19,11 +19,12 @@ typedef struct {
     int nonconformant;  // Files that would change (check mode)
 } FmtInvokeResult;
 
-/// Execute the fmt command.
+/// Execute the fmt command (new CLI framework handler).
+/// Extracts --check (bool) and positional crate names from CliParseResult.
 /// Discovers source files and invokes the formatter.
 /// --check mode: exits non-zero if any file would change.
 /// Returns 0 on success, non-zero on failure.
-int cmd_fmt(const CdoOptions* opts);
+int cmd_fmt(const CliParseResult* result, void* ctx);
 
 /// Discover all formattable source files in the given crates.
 /// Writes normalized absolute paths into out_files (caller provides pre-allocated buffer).

@@ -1,19 +1,17 @@
 #ifndef CDO_COMMANDS_CMD_TEST_H
 #define CDO_COMMANDS_CMD_TEST_H
 
-#include "core/cli.h"
+#include "cmd/cli_cmd.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/// Execute the test command.
-/// Builds and runs all test crates when no positional args are provided,
-/// or builds and runs specified test crate(s) when names are given.
-/// Reports build errors without executing; reports non-zero exit as failure.
-/// Prints a summary of passed/failed test counts.
+/// Execute the test command (new CLI framework handler).
+/// Extracts --coverage, --list, --filter, --release, --jobs, positional crate names
+/// from CliParseResult. Builds and runs test crates accordingly.
 /// Returns 0 if all tests passed, non-zero if any failed or could not build.
-int cmd_test(const CdoOptions* opts);
+int cmd_test(const CliParseResult* result, void* ctx);
 
 #ifdef __cplusplus
 }

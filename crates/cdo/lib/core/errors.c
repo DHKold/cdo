@@ -1,5 +1,5 @@
 #include "core/errors.h"
-#include "core/output.h"
+#include "core/log.h"
 
 #include <string.h>
 #include <stdbool.h>
@@ -50,22 +50,22 @@ void error_hint_from_compiler_output(const char* error_text) {
     bool printed_any = false;
 
     if (has_missing_header(error_text)) {
-        cdo_info("hint: Try: `cdo add <package>` or check include paths in crate.toml");
+        cdo_log_info("hint: Try: `cdo add <package>` or check include paths in crate.toml");
         printed_any = true;
     }
 
     if (has_undefined_reference(error_text)) {
-        cdo_info("hint: Missing library? Check [dependencies] in crate.toml");
+        cdo_log_info("hint: Missing library? Check [dependencies] in crate.toml");
         printed_any = true;
     }
 
     if (has_multiple_definition(error_text)) {
-        cdo_info("hint: Duplicate symbol — check for multiply-defined globals across translation units");
+        cdo_log_info("hint: Duplicate symbol â€” check for multiply-defined globals across translation units");
         printed_any = true;
     }
 
     if (has_missing_library(error_text)) {
-        cdo_info("hint: Missing library. Try: `cdo add <library-name>`");
+        cdo_log_info("hint: Missing library. Try: `cdo add <library-name>`");
         printed_any = true;
     }
 
@@ -74,14 +74,14 @@ void error_hint_from_compiler_output(const char* error_text) {
 
 void error_internal(const char* context, const char* detail) {
     if (context) {
-        cdo_error("Internal CDo error: %s", context);
+        cdo_log_error("Internal CDo error: %s", context);
     } else {
-        cdo_error("Internal CDo error");
+        cdo_log_error("Internal CDo error");
     }
 
     if (detail) {
-        cdo_error("  %s", detail);
+        cdo_log_error("  %s", detail);
     }
 
-    cdo_error("This is a bug. Please report it at: https://github.com/cdo-dev/cdo/issues");
+    cdo_log_error("This is a bug. Please report it at: https://github.com/cdo-dev/cdo/issues");
 }

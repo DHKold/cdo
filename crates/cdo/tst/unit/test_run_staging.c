@@ -5,7 +5,6 @@
 #include "commands/cmd_run_internal.h"
 #include "model/workspace.h"
 #include "model/module.h"
-#include "core/cli.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -274,18 +273,18 @@ TEST(run_staging_res_copy_preserving_structure) {
     int rc = run_prepare_staging(&f.ws, &f.crates[0], "debug", staging_dir, exe_path);
     TEST_ASSERT_EQ(rc, 0);
 
-    // Verify res/ directory structure is preserved in staging
-    TEST_ASSERT(test_file_exists(staging_dir, "res/config.toml"));
-    TEST_ASSERT(test_file_exists(staging_dir, "res/assets/texture.png"));
-    TEST_ASSERT(test_file_exists(staging_dir, "res/assets/models/cube.obj"));
+    // Verify res/ contents are placed directly at staging root (default resource-base = ".")
+    TEST_ASSERT(test_file_exists(staging_dir, "config.toml"));
+    TEST_ASSERT(test_file_exists(staging_dir, "assets/texture.png"));
+    TEST_ASSERT(test_file_exists(staging_dir, "assets/models/cube.obj"));
 
     // Verify content integrity
     char buf[256] = {0};
-    TEST_ASSERT_EQ(read_test_file(staging_dir, "res/config.toml", buf, sizeof(buf)), 0);
+    TEST_ASSERT_EQ(read_test_file(staging_dir, "config.toml", buf, sizeof(buf)), 0);
     TEST_ASSERT_STR_EQ(buf, "[app]\nname=\"test\"");
 
     memset(buf, 0, sizeof(buf));
-    TEST_ASSERT_EQ(read_test_file(staging_dir, "res/assets/models/cube.obj", buf, sizeof(buf)), 0);
+    TEST_ASSERT_EQ(read_test_file(staging_dir, "assets/models/cube.obj", buf, sizeof(buf)), 0);
     TEST_ASSERT_STR_EQ(buf, "OBJ_DATA");
 
     run_fixture_destroy(&f);
@@ -324,14 +323,14 @@ TEST(run_staging_shd_copy_preserving_structure) {
     int rc = run_prepare_staging(&f.ws, &f.crates[0], "debug", staging_dir, exe_path);
     TEST_ASSERT_EQ(rc, 0);
 
-    // Verify shd/ directory structure is preserved in staging
-    TEST_ASSERT(test_file_exists(staging_dir, "shd/vertex.dxil"));
-    TEST_ASSERT(test_file_exists(staging_dir, "shd/pixel.dxil"));
-    TEST_ASSERT(test_file_exists(staging_dir, "shd/effects/blur.dxil"));
+    // Verify shd/ contents are placed directly at staging root (default shader-base = ".")
+    TEST_ASSERT(test_file_exists(staging_dir, "vertex.dxil"));
+    TEST_ASSERT(test_file_exists(staging_dir, "pixel.dxil"));
+    TEST_ASSERT(test_file_exists(staging_dir, "effects/blur.dxil"));
 
     // Verify content integrity
     char buf[256] = {0};
-    TEST_ASSERT_EQ(read_test_file(staging_dir, "shd/effects/blur.dxil", buf, sizeof(buf)), 0);
+    TEST_ASSERT_EQ(read_test_file(staging_dir, "effects/blur.dxil", buf, sizeof(buf)), 0);
     TEST_ASSERT_STR_EQ(buf, "BLUR_BYTECODE");
 
     run_fixture_destroy(&f);
@@ -398,15 +397,11 @@ TEST(run_staging_non_exe_crate_error) {
     setup_run_crate(&f, 0, "libonly", false, true, false, false);
     f.ws.crate_count = 1;
 
-    // Set up options pointing to this crate
-    CdoOptions opts;
-    memset(&opts, 0, sizeof(opts));
+    // Set up positional args pointing to this crate
     const char* args[] = { "libonly" };
-    opts.positional_args = args;
-    opts.positional_count = 1;
 
     // select_run_crate should return NULL for non-exe crate
-    const Crate* result = run_select_crate(&f.ws, &opts);
+    const Crate* result = run_select_crate(&f.ws, args, 1);
     TEST_ASSERT_NULL(result);
 
     run_fixture_destroy(&f);
@@ -425,13 +420,9 @@ TEST(run_staging_nonexistent_crate_error) {
     setup_run_crate(&f, 0, "myapp", true, false, false, false);
     f.ws.crate_count = 1;
 
-    CdoOptions opts;
-    memset(&opts, 0, sizeof(opts));
     const char* args[] = { "nonexistent" };
-    opts.positional_args = args;
-    opts.positional_count = 1;
 
-    const Crate* result = run_select_crate(&f.ws, &opts);
+    const Crate* result = run_select_crate(&f.ws, args, 1);
     TEST_ASSERT_NULL(result);
 
     run_fixture_destroy(&f);
@@ -470,7 +461,7 @@ TEST(run_staging_build_failure_no_staging) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: argv forwarding — verify CdoOptions argv_rest fields are usable
+// Test: argv forwarding — verify rest args fields are usable
 // Validates: Requirements 3.8, 3.9
 // Since the actual spawn isn't testable in unit tests, we verify
 // that the select_run_crate logic works correctly with argv_rest present,
@@ -485,26 +476,19 @@ TEST(run_staging_argv_forwarding_setup) {
     f.ws.crate_count = 1;
 
     // Simulate options with argv_rest (arguments after --)
-    CdoOptions opts;
-    memset(&opts, 0, sizeof(opts));
     const char* args[] = { "myapp" };
-    opts.positional_args = args;
-    opts.positional_count = 1;
 
     const char* rest_args[] = { "--port", "8080", "--verbose" };
-    opts.argv_rest = rest_args;
-    opts.argc_rest = 3;
 
     // Verify select_run_crate succeeds even with argv_rest set
-    const Crate* result = run_select_crate(&f.ws, &opts);
+    const Crate* result = run_select_crate(&f.ws, args, 1);
     TEST_ASSERT(result != NULL);
     TEST_ASSERT_STR_EQ(result->name, "myapp");
 
-    // Verify that the argv_rest fields are properly accessible
-    TEST_ASSERT_EQ(opts.argc_rest, 3);
-    TEST_ASSERT_STR_EQ(opts.argv_rest[0], "--port");
-    TEST_ASSERT_STR_EQ(opts.argv_rest[1], "8080");
-    TEST_ASSERT_STR_EQ(opts.argv_rest[2], "--verbose");
+    // Verify that the rest args are properly accessible
+    TEST_ASSERT_STR_EQ(rest_args[0], "--port");
+    TEST_ASSERT_STR_EQ(rest_args[1], "8080");
+    TEST_ASSERT_STR_EQ(rest_args[2], "--verbose");
 
     run_fixture_destroy(&f);
     return 0;
@@ -524,11 +508,7 @@ TEST(run_staging_auto_select_single_exe) {
     setup_run_crate(&f, 1, "myapp", true, false, false, false);  // exe
     f.ws.crate_count = 2;
 
-    CdoOptions opts;
-    memset(&opts, 0, sizeof(opts));
-    opts.positional_count = 0; // no crate specified
-
-    const Crate* result = run_select_crate(&f.ws, &opts);
+    const Crate* result = run_select_crate(&f.ws, NULL, 0);
     TEST_ASSERT(result != NULL);
     TEST_ASSERT_STR_EQ(result->name, "myapp");
 

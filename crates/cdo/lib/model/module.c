@@ -24,6 +24,7 @@ const char* module_kind_to_string(ModuleKind kind) {
     case MODULE_API: return "api";
     case MODULE_RES: return "res";
     case MODULE_SHD: return "shd";
+    case MODULE_E2E: return "e2e";
     }
     return "unknown";
 }
@@ -35,11 +36,13 @@ const char* module_artifact_extension(ModuleKind kind) {
     case MODULE_EXE: return ".exe";
     case MODULE_DYN: return ".dll";
     case MODULE_TST: return ".exe";
+    case MODULE_E2E: return ".exe";
 #else
     case MODULE_LIB: return ".a";
     case MODULE_EXE: return "";
     case MODULE_DYN: return ".so";
     case MODULE_TST: return "";
+    case MODULE_E2E: return "";
 #endif
     case MODULE_API: return NULL;
     case MODULE_RES: return NULL;
@@ -69,6 +72,9 @@ int module_artifact_name(const char* crate_name, ModuleKind kind,
     case MODULE_TST:
         written = snprintf(buf, buf_size, "%s_test.exe", crate_name);
         break;
+    case MODULE_E2E:
+        written = snprintf(buf, buf_size, "%s_e2e.exe", crate_name);
+        break;
 #else
     case MODULE_LIB:
         written = snprintf(buf, buf_size, "lib%s.a", crate_name);
@@ -81,6 +87,9 @@ int module_artifact_name(const char* crate_name, ModuleKind kind,
         break;
     case MODULE_TST:
         written = snprintf(buf, buf_size, "%s_test", crate_name);
+        break;
+    case MODULE_E2E:
+        written = snprintf(buf, buf_size, "%s_e2e", crate_name);
         break;
 #endif
     case MODULE_API:

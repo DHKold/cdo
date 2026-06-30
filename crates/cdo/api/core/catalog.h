@@ -122,7 +122,7 @@ int catalog_search(const Catalog* cat, const char* query,
 /// Serialize a Catalog to TOML v1.0 text.
 /// On success, *out_buf is heap-allocated (caller frees), *out_len is the byte length.
 /// Returns 0 on success, non-zero on failure.
-/// On failure: reports error via cdo_error(), sets *out_buf = NULL and *out_len = 0.
+/// On failure: reports error via cdo_log_error(), sets *out_buf = NULL and *out_len = 0.
 int catalog_serialize(const Catalog* cat, char** out_buf, size_t* out_len);
 
 /// Free all heap memory in a Catalog struct.

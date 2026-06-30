@@ -1,6 +1,7 @@
 #include "cmd_build_internal.h"
 #include "commands/build_lock.h"
 #include "core/compiler.h"
+#include "core/cli_arg_access.h"
 #include "model/scanner.h"
 #include "model/module.h"
 #include "model/dag.h"
@@ -9,7 +10,8 @@
 #include "model/hooks.h"
 #include "core/hooks_exec.h"
 #include "commons/toml.h"
-#include "core/output.h"
+#include "core/log.h"
+#include "core/handler_ctx.h"
 #include "model/deps.h"
 #include "pal/pal.h"
 
@@ -57,7 +59,7 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
                                const CacheConfig* cache_config,
                                CacheStats* cache_stats,
                                bool no_cache,
-                               ProgressBar* progress,
+                               CliProgressBar* progress,
                                int* completed_units) {
     int rc = 0;
 
@@ -79,7 +81,7 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
         crate_env.crate_build_dir = crate_build;
 
         if (hook_execute(&crate->hooks.hooks[HOOK_PRE_BUILD], &crate_env) != 0) {
-            cdo_error("Crate '%s' pre-build hook failed, aborting crate build", crate->name);
+            cdo_log_error("Crate '%s' pre-build hook failed, aborting crate build", crate->name);
             return -1;
         }
     }
@@ -93,7 +95,7 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
                                   progress, completed_units);
         if (rc != 0) {
             // Req 8.2: If lib/ fails, skip ALL dependent modules in this crate
-            cdo_error("Library module build failed for crate '%s'; "
+            cdo_log_error("Library module build failed for crate '%s'; "
                       "skipping remaining modules", crate->name);
             return rc;
         }
@@ -101,20 +103,20 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
 
     // Req 8.1: After lib/ succeeds, build shd/, res/, exe/, dyn/, tst/ (sequential)
 
-    // Build Shader_Module if present (Req 4.3) — after lib/, before res/
+    // Build Shader_Module if present (Req 4.3) â€” after lib/, before res/
     if (crate->has_shd) {
         rc = build_shader_module(ws, crate, profile, build_prof, false, progress, completed_units);
         if (rc != 0) {
-            cdo_error("Shader module build failed for crate '%s'", crate->name);
+            cdo_log_error("Shader module build failed for crate '%s'", crate->name);
             return rc;
         }
     }
 
-    // Build Resource_Module if present (Req 1.4) — after shd/, before exe/
+    // Build Resource_Module if present (Req 1.4) â€” after shd/, before exe/
     if (crate->has_res) {
         rc = build_resource_module(ws, crate, profile, progress, completed_units);
         if (rc != 0) {
-            cdo_error("Resource module build failed for crate '%s'", crate->name);
+            cdo_log_error("Resource module build failed for crate '%s'", crate->name);
             return rc;
         }
     }
@@ -127,7 +129,7 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
                                      cache_config, cache_stats, no_cache,
                                      progress, completed_units);
         if (rc != 0) {
-            cdo_error("Executable module build failed for crate '%s'", crate->name);
+            cdo_log_error("Executable module build failed for crate '%s'", crate->name);
             return rc;
         }
     }
@@ -140,7 +142,7 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
                                          cache_config, cache_stats, no_cache,
                                          progress, completed_units);
         if (rc != 0) {
-            cdo_error("Shared library module build failed for crate '%s'", crate->name);
+            cdo_log_error("Shared library module build failed for crate '%s'", crate->name);
             return rc;
         }
     }
@@ -153,16 +155,20 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
                                cache_config, cache_stats, no_cache,
                                progress, completed_units);
         if (rc != 0) {
-            cdo_error("Test module build failed for crate '%s'", crate->name);
+            cdo_log_error("Test module build failed for crate '%s'", crate->name);
             return rc;
         }
     }
+
+    // NOTE: MODULE_E2E is intentionally NOT built during normal `cdo build`.
+    // E2E modules are only built when explicitly targeted via `cdo e2e`.
+    // (Requirements 1.5, 1.6)
 
     // Propagate dependency module outputs (res, shd, dyn) into this crate's build dir (Req 2.1, 2.2)
     if (crate->dep_count > 0) {
         rc = propagate_dep_modules(ws, crate, profile);
         if (rc != 0) {
-            cdo_error("Dependency module propagation failed for crate '%s'", crate->name);
+            cdo_log_error("Dependency module propagation failed for crate '%s'", crate->name);
             return rc;
         }
     }
@@ -185,7 +191,7 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
         crate_env.crate_build_dir = crate_build;
 
         if (hook_execute(&crate->hooks.hooks[HOOK_POST_BUILD], &crate_env) != 0) {
-            cdo_warn("Crate '%s' post-build hook failed (artifacts preserved)", crate->name);
+            cdo_log_warn("Crate '%s' post-build hook failed (artifacts preserved)", crate->name);
             rc = 1;  // Mark as failed but don't abort
         }
     }
@@ -197,10 +203,29 @@ static int build_crate_modules(const Workspace* ws, Crate* crate,
 // cmd_build implementation
 // ---------------------------------------------------------------------------
 
-int cmd_build(const CdoOptions* opts) {
-    if (!opts) {
-        cdo_error("internal error: NULL options passed to build command");
+int cmd_build(const CliParseResult* result, void* ctx) {
+    if (!result) {
+        cdo_log_error("internal error: NULL parse result passed to build command");
         return 1;
+    }
+
+    // Extract output context from handler context for progress bars
+    CdoHandlerCtx* hctx = (CdoHandlerCtx*)ctx;
+    CliOutCtx* out_ctx = hctx ? hctx->out : NULL;
+
+    // Extract arguments from CliParseResult
+    bool release = cli_arg_get_bool(result, "release");
+    bool no_cache = cli_arg_get_bool(result, "no-cache");
+    bool coverage = cli_arg_get_bool(result, "coverage");
+    int jobs_value = cli_arg_get_int(result, "jobs", 0);
+    int lock_timeout_raw = cli_arg_get_int(result, "lock-timeout", -1);
+    const char* profile_str = cli_arg_get_str(result, "profile");
+
+    const char** crate_names = NULL;
+    int crate_name_count = 0;
+    if (result->positional_count > 0) {
+        crate_names = result->positional_values;
+        crate_name_count = result->positional_count;
     }
 
     uint64_t build_start_ms = pal_time_ms();
@@ -213,32 +238,32 @@ int cmd_build(const CdoOptions* opts) {
 #else
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
 #endif
-        cdo_error("failed to determine current working directory");
+        cdo_log_error("failed to determine current working directory");
         return 1;
     }
 
     int rc = workspace_load(cwd, &ws);
     if (rc != 0) {
-        cdo_error("failed to load workspace");
+        cdo_log_error("failed to load workspace");
         return 1;
     }
 
     // --- Step 1b: Acquire build lock ---
-    int lock_timeout = (opts->lock_timeout >= 0) ? opts->lock_timeout : 30;
+    int lock_timeout = (lock_timeout_raw >= 0) ? lock_timeout_raw : 30;
     BuildLock* lock = NULL;
     int lock_rc = build_lock_acquire(ws.root_path, lock_timeout, &lock);
     if (lock_rc != 0) {
         if (lock_rc == PAL_ERR_TIMEOUT) {
-            cdo_error("could not acquire build lock within %d seconds "
+            cdo_log_error("could not acquire build lock within %d seconds "
                       "(another cdo process may be building)", lock_timeout);
         } else {
-            cdo_error("failed to acquire build lock");
+            cdo_log_error("failed to acquire build lock");
         }
         workspace_free(&ws);
         return 1;
     }
 
-    // Set re-entrancy env var so nested builds (e.g., cmd_test → cmd_build) skip locking
+    // Set re-entrancy env var so nested builds (e.g., cmd_test â†’ cmd_build) skip locking
 #ifdef _WIN32
     _putenv_s("CDO_BUILD_LOCK_HELD", "1");
 #else
@@ -246,14 +271,6 @@ int cmd_build(const CdoOptions* opts) {
 #endif
 
     // --- Step 2: Resolve build order ---
-    const char** crate_names = NULL;
-    int crate_name_count = 0;
-
-    if (opts->positional_count > 0) {
-        crate_names = opts->positional_args;
-        crate_name_count = opts->positional_count;
-    }
-
     rc = workspace_resolve(&ws, crate_names, crate_name_count);
     if (rc != 0) {
         // workspace_resolve reports errors internally for cycles, etc.
@@ -268,7 +285,7 @@ int cmd_build(const CdoOptions* opts) {
                     }
                 }
                 if (!found) {
-                    cdo_error("unknown crate: '%s'", crate_names[i]);
+                    cdo_log_error("unknown crate: '%s'", crate_names[i]);
                 }
             }
         }
@@ -288,7 +305,7 @@ int cmd_build(const CdoOptions* opts) {
                 }
             }
             if (!found) {
-                cdo_error("unknown crate: '%s'", crate_names[i]);
+                cdo_log_error("unknown crate: '%s'", crate_names[i]);
                 build_lock_release(lock);
                 workspace_free(&ws);
                 return 1;
@@ -300,7 +317,7 @@ int cmd_build(const CdoOptions* opts) {
     CompilerInfo compiler = {0};
     rc = compiler_detect(&compiler);
     if (rc != 0) {
-        cdo_error("no C/C++ compiler found on PATH or vendored tools");
+        cdo_log_error("no C/C++ compiler found on PATH or vendored tools");
         build_lock_release(lock);
         workspace_free(&ws);
         return 1;
@@ -329,7 +346,7 @@ int cmd_build(const CdoOptions* opts) {
                     snprintf(new_path, new_len, "%s;%s", compiler_dir, old_path);
                     _putenv_s("PATH", new_path);
                     free(new_path);
-                    cdo_debug("Prepended vendored tool dir to PATH: %s", compiler_dir);
+                    cdo_log_debug("Prepended vendored tool dir to PATH: %s", compiler_dir);
                 }
             } else {
                 _putenv_s("PATH", compiler_dir);
@@ -337,39 +354,39 @@ int cmd_build(const CdoOptions* opts) {
         }
     }
 
-    cdo_info("using %s (%s)",
+    cdo_log_info("using %s (%s)",
              compiler.family == COMPILER_GCC   ? "gcc" :
              compiler.family == COMPILER_CLANG ? "clang" :
              compiler.family == COMPILER_MSVC  ? "msvc" : "unknown",
              compiler.version);
 
     // --- Resolve settings ---
-    const char* profile = resolve_profile(opts);
-    int jobs = resolve_jobs(opts);
+    const char* profile = resolve_profile_raw(release, profile_str);
+    int jobs = resolve_jobs_raw(jobs_value);
 
     // Load build profile from workspace manifest (or use built-in defaults)
     BuildProfile build_profile;
     build_profile_load(ws.root_path, profile, &build_profile);
 
     if (build_profile.loaded) {
-        cdo_debug("loaded profile '%s' from workspace manifest", profile);
+        cdo_log_debug("loaded profile '%s' from workspace manifest", profile);
     } else {
-        cdo_debug("using built-in defaults for profile '%s'", profile);
+        cdo_log_debug("using built-in defaults for profile '%s'", profile);
     }
 
-    cdo_info("profile: %s, jobs: %d", profile, jobs);
+    cdo_log_info("profile: %s, jobs: %d", profile, jobs);
 
     // --- Coverage flags (--coverage) ---
     static const char* coverage_flags[] = {"-fprofile-arcs", "-ftest-coverage"};
-    int coverage_flag_count = opts->coverage ? 2 : 0;
+    int coverage_flag_count = coverage ? 2 : 0;
 
     // --- Initialize cache if enabled (Req 5.1, 7.1, 8.4) ---
     bool cache_active = false;
-    if (ws.cache_config.enabled && !opts->no_cache) {
+    if (ws.cache_config.enabled && !no_cache) {
         if (strcmp(ws.cache_config.backend, "builtin") == 0) {
             // Builtin cache: initialize the store directory
             if (cache_init(&ws.cache_config, ws.root_path) != 0) {
-                cdo_warn("Cache initialization failed, continuing without cache");
+                cdo_log_warn("Cache initialization failed, continuing without cache");
                 ws.cache_config.enabled = false;
             } else {
                 cache_active = true;
@@ -388,9 +405,9 @@ int cmd_build(const CdoOptions* opts) {
             int probe_rc = pal_spawn(&probe_opts, &probe_result);
             if (probe_rc == 0 && probe_result.exit_code == 0) {
                 cache_active = true;
-                cdo_debug("External cache backend '%s' found", ws.cache_config.backend);
+                cdo_log_debug("External cache backend '%s' found", ws.cache_config.backend);
             } else {
-                cdo_warn("External cache backend '%s' not found on PATH, continuing without cache", ws.cache_config.backend);
+                cdo_log_warn("External cache backend '%s' not found on PATH, continuing without cache", ws.cache_config.backend);
                 ws.cache_config.enabled = false;
             }
             pal_spawn_result_free(&probe_result);
@@ -410,14 +427,14 @@ int cmd_build(const CdoOptions* opts) {
         // crate fields NULL for workspace hooks
 
         if (hook_execute(&ws.ws_hooks.hooks[HOOK_PRE_BUILD], &ws_hook_env) != 0) {
-            cdo_error("Workspace pre-build hook failed, aborting build");
+            cdo_log_error("Workspace pre-build hook failed, aborting build");
             build_lock_release(lock);
             workspace_free(&ws);
             return 1;
         }
     }
 
-    // --- Step 5: Count total compilation units for progress (Req 7.1–7.7) ---
+    // --- Step 5: Count total compilation units for progress (Req 7.1â€“7.7) ---
     // Count compilable files (.c, .cpp, .cxx, .cc) across compiled modules
     // (lib, exe, dyn, tst) only. Exclude res/ and shd/ files.
     // build_order already contains only targeted crates + transitive deps
@@ -469,7 +486,7 @@ int cmd_build(const CdoOptions* opts) {
     }
 
     // Req 7.7: If total compilable count is zero, skip progress bar entirely
-    ProgressBar* progress = (total_units > 0) ? progress_create("Building", total_units) : NULL;
+    CliProgressBar* progress = (total_units > 0) ? cli_out_progress_create(out_ctx, "Building", total_units) : NULL;
     int completed_units = 0;
     CacheStats cache_stats = {0};
     int failed = 0;
@@ -484,7 +501,7 @@ int cmd_build(const CdoOptions* opts) {
         DagGraph* graph = NULL;
         rc = dag_generate(&ws, profile, &graph);
         if (rc != 0) {
-            cdo_warn("DAG generation failed (rc=%d), falling back to sequential build", rc);
+            cdo_log_warn("DAG generation failed (rc=%d), falling back to sequential build", rc);
             goto sequential_path;
         }
 
@@ -497,14 +514,14 @@ int cmd_build(const CdoOptions* opts) {
             total_edges += graph->tasks[i].dep_count;
         }
 
-        cdo_info("Building %d crates (%d compile tasks, %d link tasks) with %d threads", ws.build_order_count, compile_tasks, link_tasks, jobs);
-        cdo_debug("DAG: %d tasks, %d dependency edges", graph->task_count, total_edges);
+        cdo_log_info("Building %d crates (%d compile tasks, %d link tasks) with %d threads", ws.build_order_count, compile_tasks, link_tasks, jobs);
+        cdo_log_debug("DAG: %d tasks, %d dependency edges", graph->task_count, total_edges);
 
         // Update progress bar to match DAG compile task count (may differ from initial scan
         // if DAG skips empty modules or hooks are present).
         if (progress && compile_tasks != total_units) {
-            progress_finish(progress);
-            progress = (compile_tasks > 0) ? progress_create("Building", compile_tasks) : NULL;
+            cli_out_progress_finish(progress);
+            progress = (compile_tasks > 0) ? cli_out_progress_create(out_ctx, "Building", compile_tasks) : NULL;
         }
 
         DagSchedulerConfig sched_config = {0};
@@ -512,7 +529,7 @@ int cmd_build(const CdoOptions* opts) {
         sched_config.compiler = &compiler;
         sched_config.cache_config = cache_active ? &ws.cache_config : NULL;
         sched_config.cache_stats = &cache_stats;
-        sched_config.no_cache = opts->no_cache;
+        sched_config.no_cache = no_cache;
         sched_config.jobs = jobs;
         sched_config.profile = profile;
         sched_config.progress = progress;
@@ -528,7 +545,7 @@ int cmd_build(const CdoOptions* opts) {
 
         // Progress is finished by the scheduler on failure, finish it on success
         if (!failed && progress) {
-            progress_finish(progress);
+            cli_out_progress_finish(progress);
             progress = NULL;
         }
 
@@ -546,7 +563,7 @@ sequential_path:
         ws_hook_env.build_dir = ws_build_dir;
 
         if (hook_execute(&ws.ws_hooks.hooks[HOOK_PRE_BUILD], &ws_hook_env) != 0) {
-            cdo_error("Workspace pre-build hook failed, aborting build");
+            cdo_log_error("Workspace pre-build hook failed, aborting build");
             build_lock_release(lock);
             workspace_free(&ws);
             return 1;
@@ -670,12 +687,12 @@ sequential_path:
                                      &build_profile, jobs,
                                      coverage_flags, coverage_flag_count,
                                      cache_active ? &ws.cache_config : NULL,
-                                     &cache_stats, opts->no_cache,
+                                     &cache_stats, no_cache,
                                      progress, &completed_units);
             if (rc != 0) {
                 // Req 7.8: Finalize progress bar at current count before reporting error
                 if (progress) {
-                    progress_finish(progress);
+                    cli_out_progress_finish(progress);
                     progress = NULL;
                 }
                 failed = 1;
@@ -698,7 +715,7 @@ sequential_path:
             legacy_ctx.coverage_flag_count = coverage_flag_count;
             legacy_ctx.cache_config = cache_active ? &ws.cache_config : NULL;
             legacy_ctx.cache_stats = &cache_stats;
-            legacy_ctx.no_cache = opts->no_cache;
+            legacy_ctx.no_cache = no_cache;
             legacy_ctx.progress = progress;
             legacy_ctx.completed_units = &completed_units;
             legacy_ctx.crate_full_path = crate_full_path;
@@ -714,7 +731,7 @@ sequential_path:
             if (legacy_rc == 1) {
                 // Req 7.8: Finalize progress bar at current count before reporting error
                 if (progress) {
-                    progress_finish(progress);
+                    cli_out_progress_finish(progress);
                     progress = NULL;
                 }
                 failed = 1;
@@ -725,7 +742,7 @@ sequential_path:
     }
 
     // --- Finish (sequential path) ---
-    progress_finish(progress);
+    cli_out_progress_finish(progress);
 
 build_done:
     // --- Workspace post-build hook ---
@@ -740,7 +757,7 @@ build_done:
         ws_hook_env.build_dir = ws_build_dir;
 
         if (hook_execute(&ws.ws_hooks.hooks[HOOK_POST_BUILD], &ws_hook_env) != 0) {
-            cdo_warn("Workspace post-build hook failed (artifacts preserved)");
+            cdo_log_warn("Workspace post-build hook failed (artifacts preserved)");
             failed = 1;
         }
     }
@@ -751,19 +768,19 @@ build_done:
     }
 
     if (failed) {
-        cdo_error("build failed");
+        cdo_log_error("build failed");
     } else {
         // Print cache summary (Req 5.1, 5.2, 5.3)
         if (cache_active) {
             int total = cache_stats.hits + cache_stats.misses;
             if (total > 0) {
                 int hit_rate = (cache_stats.hits * 100) / total;
-                cdo_info("Cache: %d hits, %d misses (%d%% hit rate)", cache_stats.hits, cache_stats.misses, hit_rate);
+                cdo_log_info("Cache: %d hits, %d misses (%d%% hit rate)", cache_stats.hits, cache_stats.misses, hit_rate);
             }
         }
 
         double elapsed_s = (double)(pal_time_ms() - build_start_ms) / 1000.0;
-        cdo_info("Build completed in %.2fs", elapsed_s);
+        cdo_log_info("Build completed in %.2fs", elapsed_s);
     }
 
     build_profile_free(&build_profile);
@@ -771,3 +788,4 @@ build_done:
     workspace_free(&ws);
     return failed ? 1 : 0;
 }
+// End of cmd_build.c

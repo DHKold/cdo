@@ -1,7 +1,7 @@
 #include "workspace_internal.h"
 #include "model/workspace.h"
 #include "commons/toml.h"
-#include "commons/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdbool.h>
@@ -266,7 +266,7 @@ int workspace_resolve(Workspace* ws, const char** crate_names, int count) {
 
     // Check for cycle: if not all included crates are in the build order
     if (ws->build_order_count < included_count) {
-        // Cycle detected — use DFS to find and report the cycle path
+        // Cycle detected â€” use DFS to find and report the cycle path
         int* color = (int*)calloc((size_t)n, sizeof(int));
         int* parent_arr = (int*)malloc((size_t)n * sizeof(int));
         int* cycle_path = (int*)malloc((size_t)(n + 1) * sizeof(int));
@@ -302,12 +302,12 @@ int workspace_resolve(Workspace* ws, const char** crate_names, int count) {
                     if (written > 0) offset += written;
                     if ((size_t)offset >= sizeof(cycle_msg) - 1) break;
                 }
-                cdo_error("Circular dependency detected: %s", cycle_msg);
+                cdo_log_error("Circular dependency detected: %s", cycle_msg);
             } else {
-                cdo_error("Circular dependency detected in workspace");
+                cdo_log_error("Circular dependency detected in workspace");
             }
         } else {
-            cdo_error("Circular dependency detected in workspace");
+            cdo_log_error("Circular dependency detected in workspace");
         }
 
         free(color);
@@ -328,7 +328,7 @@ int workspace_resolve(Workspace* ws, const char** crate_names, int count) {
 }
 
 // =============================================================================
-// workspace_resolve_module_deps — inter-crate module validation
+// workspace_resolve_module_deps â€” inter-crate module validation
 // =============================================================================
 
 /// BFS-based transitive dependency collector.
@@ -400,7 +400,7 @@ int workspace_resolve_module_deps(Workspace* ws) {
                     if (written > 0) offset += written;
                     if ((size_t)offset >= sizeof(cycle_msg) - 1) break;
                 }
-                cdo_error("Circular dependency detected: %s", cycle_msg);
+                cdo_log_error("Circular dependency detected: %s", cycle_msg);
                 errors++;
                 break;
             }
@@ -425,7 +425,7 @@ int workspace_resolve_module_deps(Workspace* ws) {
             const Crate* dep_crate = &ws->crates[dep_idx];
 
             if (dep_crate->module_count > 0 && !dep_crate->has_lib) {
-                cdo_error("Crate '%s' depends on '%s' which has no library module (lib/)",
+                cdo_log_error("Crate '%s' depends on '%s' which has no library module (lib/)",
                           crate->name, dep_crate->name);
                 errors++;
             }
@@ -454,7 +454,7 @@ int workspace_resolve_module_deps(Workspace* ws) {
             if (!visited[j]) continue;
             const Crate* trans_dep = &ws->crates[j];
             if (trans_dep->module_count > 0 && !trans_dep->has_lib) {
-                cdo_error("Crate '%s' transitively depends on '%s' which has no library module (lib/)",
+                cdo_log_error("Crate '%s' transitively depends on '%s' which has no library module (lib/)",
                           crate->name, trans_dep->name);
                 errors++;
             }

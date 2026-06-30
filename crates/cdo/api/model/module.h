@@ -17,9 +17,10 @@ typedef enum {
     MODULE_API,     // api/ -> header-only (no compilation)
     MODULE_RES,     // res/ -> resource files (copy only)
     MODULE_SHD,     // shd/ -> shader sources (compiled to .dxil)
+    MODULE_E2E,     // e2e/ -> end-to-end test executable
 } ModuleKind;
 
-#define MODULE_KIND_COUNT 7
+#define MODULE_KIND_COUNT 8
 
 // --- Module ---
 typedef struct {

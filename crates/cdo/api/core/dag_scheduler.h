@@ -5,7 +5,7 @@
 #include "model/workspace.h"
 #include "core/compiler.h"
 #include "core/cache.h"
-#include "commons/output.h"
+#include "out/cli_out.h"
 
 #include <stdbool.h>
 
@@ -25,7 +25,7 @@ typedef struct {
     bool                no_cache;
     int                 jobs;
     const char*         profile;
-    ProgressBar*        progress;
+    CliProgressBar*        progress;
     int                 total_compile_units;
 } DagSchedulerConfig;
 

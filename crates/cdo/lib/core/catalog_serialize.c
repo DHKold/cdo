@@ -1,12 +1,12 @@
 /*
- * catalog_serialize.c — Serialize a Catalog to TOML v1.0 text.
+ * catalog_serialize.c â€” Serialize a Catalog to TOML v1.0 text.
  *
  * Produces valid TOML with [[tool]] and [[package]] array-of-tables entries,
  * preserving array ordering and key-value pair ordering.
  */
 
 #include "core/catalog.h"
-#include "core/output.h"
+#include "core/log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -275,7 +275,7 @@ static int serialize_package_entry(CatBuf* b, const CatalogPackageEntry* pkg,
 int catalog_serialize(const Catalog* cat, char** out_buf, size_t* out_len)
 {
     if (!cat || !out_buf || !out_len) {
-        cdo_error("catalog_serialize: invalid arguments (NULL pointer)");
+        cdo_log_error("catalog_serialize: invalid arguments (NULL pointer)");
         if (out_buf) *out_buf = NULL;
         if (out_len) *out_len = 0;
         return 1;
@@ -294,7 +294,7 @@ int catalog_serialize(const Catalog* cat, char** out_buf, size_t* out_len)
     for (int i = 0; i < cat->tool_count; i++) {
         if (serialize_tool_entry(&buf, &cat->tools[i], !first_entry) != 0) {
             catbuf_free(&buf);
-            cdo_error("catalog_serialize: out of memory while serializing tool '%s'",
+            cdo_log_error("catalog_serialize: out of memory while serializing tool '%s'",
                       cat->tools[i].name);
             return 1;
         }
@@ -305,7 +305,7 @@ int catalog_serialize(const Catalog* cat, char** out_buf, size_t* out_len)
     for (int i = 0; i < cat->package_count; i++) {
         if (serialize_package_entry(&buf, &cat->packages[i], !first_entry) != 0) {
             catbuf_free(&buf);
-            cdo_error("catalog_serialize: out of memory while serializing package '%s'",
+            cdo_log_error("catalog_serialize: out of memory while serializing package '%s'",
                       cat->packages[i].name);
             return 1;
         }
@@ -315,7 +315,7 @@ int catalog_serialize(const Catalog* cat, char** out_buf, size_t* out_len)
     /* Null-terminate the buffer */
     if (catbuf_grow(&buf, 1) != 0) {
         catbuf_free(&buf);
-        cdo_error("catalog_serialize: out of memory finalizing output");
+        cdo_log_error("catalog_serialize: out of memory finalizing output");
         return 1;
     }
     buf.data[buf.len] = '\0';

@@ -1,6 +1,6 @@
 #include "cmd_deps_internal.h"
 #include "model/deps.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "commons/toml.h"
 #include "pal/pal.h"
 
@@ -17,7 +17,7 @@ int cmd_deps_manifest_load(TomlTable** table) {
     size_t len = 0;
     int rc = pal_file_read(CRATE_MANIFEST, &buf, &len);
     if (rc != PAL_OK) {
-        cdo_error("Could not read '%s' — are you in a crate directory?", CRATE_MANIFEST);
+        cdo_log_error("Could not read '%s' â€” are you in a crate directory?", CRATE_MANIFEST);
         return 1;
     }
 
@@ -25,7 +25,7 @@ int cmd_deps_manifest_load(TomlTable** table) {
     rc = toml_parse(buf, len, table, &err);
     free(buf);
     if (rc != 0) {
-        cdo_error("Failed to parse '%s': line %d col %d: %s",
+        cdo_log_error("Failed to parse '%s': line %d col %d: %s",
                   CRATE_MANIFEST, err.line, err.col, err.message);
         return 1;
     }
@@ -37,14 +37,14 @@ int cmd_deps_manifest_save(const TomlTable* table) {
     size_t len = 0;
     int rc = toml_serialize(table, &buf, &len);
     if (rc != 0) {
-        cdo_error("Failed to serialize manifest");
+        cdo_log_error("Failed to serialize manifest");
         return 1;
     }
 
     rc = pal_file_write(CRATE_MANIFEST, buf, len);
     free(buf);
     if (rc != PAL_OK) {
-        cdo_error("Failed to write '%s'", CRATE_MANIFEST);
+        cdo_log_error("Failed to write '%s'", CRATE_MANIFEST);
         return 1;
     }
     return 0;
@@ -63,12 +63,12 @@ int cmd_deps_get_cache_dir(char* buf, size_t buf_size) {
     char home[260];
     int rc = pal_get_home_dir(home, sizeof(home));
     if (rc != PAL_OK) {
-        cdo_error("Could not determine home directory");
+        cdo_log_error("Could not determine home directory");
         return 1;
     }
     rc = pal_path_join(buf, buf_size, home, ".cdo/cache");
     if (rc != 0) {
-        cdo_error("Cache path too long");
+        cdo_log_error("Cache path too long");
         return 1;
     }
     return 0;
@@ -105,41 +105,79 @@ int cmd_deps_regenerate_lock(const TomlTable* deps) {
     int count = 0;
     int rc = cmd_deps_collect_dep_specs(deps, &specs, &count);
     if (rc != 0) {
-        cdo_error("Failed to collect dependency specs for lock file");
+        cdo_log_error("Failed to collect dependency specs for lock file");
         return 1;
     }
 
     rc = dep_lock_write(LOCK_FILE, specs, count);
     free(specs);
     if (rc != 0) {
-        cdo_error("Failed to write lock file");
+        cdo_log_error("Failed to write lock file");
         return 1;
     }
     return 0;
 }
 
 /* -------------------------------------------------------------------------- */
-/* cmd_deps (dispatcher: cdo deps <add|remove|list>)                           */
+/* deps list (cdo deps list)                                                   */
 /* -------------------------------------------------------------------------- */
 
-int cmd_deps(const CdoOptions* opts) {
-    if (opts->help || opts->positional_count < 1) {
-        cdo_cli_print_help(CDO_CMD_DEPS, stdout);
-        return opts->help ? 0 : 1;
+/// Get the version string from a dependency entry value.
+static const char* get_dep_version(const TomlValue* val) {
+    if (!val) return "*";
+    if (val->type == TOML_STRING) {
+        return val->as.string;
     }
+    if (val->type == TOML_TABLE || val->type == TOML_INLINE_TABLE) {
+        const TomlValue* ver = toml_get(val->as.table, "version");
+        if (ver && ver->type == TOML_STRING) {
+            return ver->as.string;
+        }
+    }
+    return "*";
+}
 
-    const char* subcmd = opts->positional_args[0];
+int cmd_deps_list(const CliParseResult* result, void* ctx) {
+    (void)result;
+    (void)ctx;
 
-    if (strcmp(subcmd, "add") == 0) {
-        return deps_add(opts);
-    } else if (strcmp(subcmd, "remove") == 0) {
-        return deps_remove(opts);
-    } else if (strcmp(subcmd, "list") == 0) {
-        return deps_list(opts);
-    } else {
-        cdo_error("Unknown subcommand '%s'", subcmd);
-        cdo_info("Available subcommands: add, remove, list");
-        cdo_info("Run 'cdo deps --help' for usage information.");
+    /* Load the crate manifest */
+    TomlTable* root = NULL;
+    if (cmd_deps_manifest_load(&root) != 0) {
         return 1;
     }
+
+    bool printed_any = false;
+
+    /* Print [dependencies] entries with [normal] label */
+    const TomlValue* normal_val = toml_get(root, DEPS_SECTION);
+    if (normal_val && (normal_val->type == TOML_TABLE || normal_val->type == TOML_INLINE_TABLE)) {
+        const TomlTable* deps = normal_val->as.table;
+        for (const TomlEntry* e = deps->head; e != NULL; e = e->next) {
+            const char* version = get_dep_version(e->value);
+            printf("  %s %s [normal]\n", e->key, version);
+            printed_any = true;
+        }
+    }
+
+    /* Print [dev-dependencies] entries with [dev] label */
+    const TomlValue* dev_val = toml_get(root, DEV_DEPS_SECTION);
+    if (dev_val && (dev_val->type == TOML_TABLE || dev_val->type == TOML_INLINE_TABLE)) {
+        const TomlTable* dev_deps = dev_val->as.table;
+        for (const TomlEntry* e = dev_deps->head; e != NULL; e = e->next) {
+            const char* version = get_dep_version(e->value);
+            printf("  %s %s [dev]\n", e->key, version);
+            printed_any = true;
+        }
+    }
+
+    if (!printed_any) {
+        cdo_log_info("No dependencies found");
+    }
+
+    toml_free(root);
+    return 0;
 }
+
+/* -------------------------------------------------------------------------- */
+// End of cmd_deps.c

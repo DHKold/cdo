@@ -1,8 +1,8 @@
-﻿/*
+/*
  * catalog_load.c - Catalog loading, parsing, deduplication, and free.
  */
 #include "core/catalog.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "commons/semver.h"
 #include "commons/toml.h"
 #include "pal/pal.h"
@@ -25,7 +25,7 @@ int catalog_detect_platform(CatalogPlatform* out)
 #elif defined(__APPLE__)
     os = "macos";
 #else
-    cdo_error("unsupported operating system - catalog resolution requires windows, linux, or macos");
+    cdo_log_error("unsupported operating system - catalog resolution requires windows, linux, or macos");
     return 1;
 #endif
 #if defined(_M_X64) || defined(__x86_64__)
@@ -33,7 +33,7 @@ int catalog_detect_platform(CatalogPlatform* out)
 #elif defined(_M_ARM64) || defined(__aarch64__)
     arch = "arm64";
 #else
-    cdo_error("unsupported CPU architecture - catalog resolution requires x86_64 or arm64");
+    cdo_log_error("unsupported CPU architecture - catalog resolution requires x86_64 or arm64");
     return 1;
 #endif
     snprintf(out->os, sizeof(out->os), "%s", os);
@@ -96,7 +96,7 @@ static int catalog_parse_platforms(const TomlTable* pt, CatalogPlatformEntry* ou
         snprintf(pe->triple, sizeof(pe->triple), "%s", e->key);
         const TomlValue* u = toml_get(t, "url");
         if (!u || u->type != TOML_STRING) {
-            cdo_warn("%s: entry [%d] platform '%s' missing 'url', skipping", fp, idx, e->key);
+            cdo_log_warn("%s: entry [%d] platform '%s' missing 'url', skipping", fp, idx, e->key);
             e = e->next; continue;
         }
         snprintf(pe->url, sizeof(pe->url), "%s", u->as.string);
@@ -139,26 +139,26 @@ static void catalog_parse_tools(Catalog* cat, const TomlTable* root,
         TomlTable* et = ev->as.table;
         const TomlValue* nv = toml_get(et, "name");
         if (!nv || nv->type != TOML_STRING) {
-            cdo_warn("%s: tool entry [%d] missing required field 'name', skipping", fp, i);
+            cdo_log_warn("%s: tool entry [%d] missing required field 'name', skipping", fp, i);
             continue;
         }
         const char* name = nv->as.string;
         if (!catalog_validate_name(name)) {
-            cdo_warn("%s: tool entry [%d] has invalid name '%s', skipping", fp, i, name ? name : "");
+            cdo_log_warn("%s: tool entry [%d] has invalid name '%s', skipping", fp, i, name ? name : "");
             continue;
         }
         const TomlValue* vv = toml_get(et, "version");
         if (!vv || vv->type != TOML_STRING) {
-            cdo_warn("%s: tool entry [%d] missing required field 'version', skipping", fp, i);
+            cdo_log_warn("%s: tool entry [%d] missing required field 'version', skipping", fp, i);
             continue;
         }
         Semver sv;
         if (semver_parse(vv->as.string, &sv) != 0) {
-            cdo_warn("%s: tool entry [%d] has invalid version '%s', skipping", fp, i, vv->as.string);
+            cdo_log_warn("%s: tool entry [%d] has invalid version '%s', skipping", fp, i, vv->as.string);
             continue;
         }
         if (cat->tool_count >= cat->tool_capacity && catalog_grow_tools(cat) != 0) {
-            cdo_error("out of memory growing tool catalog"); return;
+            cdo_log_error("out of memory growing tool catalog"); return;
         }
         CatalogToolEntry* tool = &cat->tools[cat->tool_count];
         memset(tool, 0, sizeof(*tool));
@@ -189,26 +189,26 @@ static void catalog_parse_packages(Catalog* cat, const TomlTable* root,
         TomlTable* et = ev->as.table;
         const TomlValue* nv = toml_get(et, "name");
         if (!nv || nv->type != TOML_STRING) {
-            cdo_warn("%s: package entry [%d] missing required field 'name', skipping", fp, i);
+            cdo_log_warn("%s: package entry [%d] missing required field 'name', skipping", fp, i);
             continue;
         }
         const char* name = nv->as.string;
         if (!catalog_validate_name(name)) {
-            cdo_warn("%s: package entry [%d] has invalid name '%s', skipping", fp, i, name ? name : "");
+            cdo_log_warn("%s: package entry [%d] has invalid name '%s', skipping", fp, i, name ? name : "");
             continue;
         }
         const TomlValue* vv = toml_get(et, "version");
         if (!vv || vv->type != TOML_STRING) {
-            cdo_warn("%s: package entry [%d] missing required field 'version', skipping", fp, i);
+            cdo_log_warn("%s: package entry [%d] missing required field 'version', skipping", fp, i);
             continue;
         }
         Semver sv;
         if (semver_parse(vv->as.string, &sv) != 0) {
-            cdo_warn("%s: package entry [%d] has invalid version '%s', skipping", fp, i, vv->as.string);
+            cdo_log_warn("%s: package entry [%d] has invalid version '%s', skipping", fp, i, vv->as.string);
             continue;
         }
         if (cat->package_count >= cat->package_capacity && catalog_grow_packages(cat) != 0) {
-            cdo_error("out of memory growing package catalog"); return;
+            cdo_log_error("out of memory growing package catalog"); return;
         }
         CatalogPackageEntry* pkg = &cat->packages[cat->package_count];
         memset(pkg, 0, sizeof(*pkg));
@@ -243,7 +243,7 @@ int catalog_parse_file(Catalog* cat, const char* filepath,
     memset(&err, 0, sizeof(err));
     int rc = toml_parse(content, content_len, &root, &err);
     if (rc != 0 || !root) {
-        cdo_error("%s:%d: TOML parse error: %s", filepath, err.line, err.message);
+        cdo_log_error("%s:%d: TOML parse error: %s", filepath, err.line, err.message);
         if (root) toml_free(root);
         return 1;
     }
@@ -298,7 +298,7 @@ static void catalog_deduplicate_tools(Catalog* cat)
             int loser = catalog_pick_loser(i, cat->tools[i]._precedence, cat->tools[i]._source_file,
                                            j, cat->tools[j]._precedence, cat->tools[j]._source_file, &w);
             if (w) { int winner = (loser == i) ? j : i;
-                cdo_warn("%s: duplicate tool entry '%s' version '%s' (keeping last occurrence)",
+                cdo_log_warn("%s: duplicate tool entry '%s' version '%s' (keeping last occurrence)",
                          cat->tools[winner]._source_file, cat->tools[winner].name, cat->tools[winner].version); }
             rm[loser] = true;
         }
@@ -325,7 +325,7 @@ static void catalog_deduplicate_packages(Catalog* cat)
             int loser = catalog_pick_loser(i, cat->packages[i]._precedence, cat->packages[i]._source_file,
                                            j, cat->packages[j]._precedence, cat->packages[j]._source_file, &w);
             if (w) { int winner = (loser == i) ? j : i;
-                cdo_warn("%s: duplicate package entry '%s' version '%s' (keeping last occurrence)",
+                cdo_log_warn("%s: duplicate package entry '%s' version '%s' (keeping last occurrence)",
                          cat->packages[winner]._source_file, cat->packages[winner].name, cat->packages[winner].version); }
             catalog_free_package_strings(&cat->packages[loser]);
             rm[loser] = true;
@@ -399,7 +399,7 @@ static int catalog_load_directory(Catalog* cat, const char* dir_path, int preced
     for (int i = 0; i < dc.count; i++) {
         char* buf = NULL; size_t len = 0;
         if (pal_file_read(dc.paths[i], &buf, &len) != 0) {
-            cdo_warn("catalog: failed to read '%s', skipping", dc.paths[i]);
+            cdo_log_warn("catalog: failed to read '%s', skipping", dc.paths[i]);
             free(dc.paths[i]); continue;
         }
         catalog_parse_file(cat, dc.paths[i], buf, len, precedence);
@@ -433,7 +433,7 @@ int catalog_load(Catalog* out, const char* workspace_root)
     if (pal_path_exists("catalogs") == 0)
         total += catalog_load_directory(out, "catalogs", 2);
     if (total == 0)
-        cdo_warn("no catalog files found; use --url to specify download URLs manually");
+        cdo_log_warn("no catalog files found; use --url to specify download URLs manually");
     catalog_deduplicate(out);
     return 0;
 }

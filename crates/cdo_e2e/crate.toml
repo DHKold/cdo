@@ -1,0 +1,7 @@
+[crate]
+name = "cdo_e2e"
+c-standard = 17
+
+[dependencies]
+cdo_ut = {}
+cdo = {}

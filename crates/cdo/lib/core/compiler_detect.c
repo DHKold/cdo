@@ -1,9 +1,9 @@
-// compiler_detect.c — Compiler probing and detection logic
+// compiler_detect.c â€” Compiler probing and detection logic
 // Extracted from compiler.c as part of the source restructure.
 #include "compiler_internal.h"
 #include "core/compiler.h"
 #include "pal/pal.h"
-#include "core/output.h"
+#include "core/log.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -167,13 +167,13 @@ static int try_vendored_tools(CompilerInfo* info) {
 
     for (int i = 0; gcc_probes[i] != NULL; i++) {
         if (pal_path_exists(gcc_probes[i]) == 0) {
-            // Found a vendored GCC — try to run it
+            // Found a vendored GCC â€” try to run it
             if (try_compiler(gcc_probes[i], "--version", info->path, sizeof(info->path),
                              info->version, sizeof(info->version)) == 0) {
                 info->family = COMPILER_GCC;
                 strncpy(info->linker_path, info->path, sizeof(info->linker_path) - 1);
                 info->linker_path[sizeof(info->linker_path) - 1] = '\0';
-                cdo_debug("Detected vendored compiler: GCC %s at %s", info->version, info->path);
+                cdo_log_debug("Detected vendored compiler: GCC %s at %s", info->version, info->path);
                 return 0;
             }
         }
@@ -192,7 +192,7 @@ static int try_vendored_tools(CompilerInfo* info) {
                 info->family = COMPILER_CLANG;
                 strncpy(info->linker_path, info->path, sizeof(info->linker_path) - 1);
                 info->linker_path[sizeof(info->linker_path) - 1] = '\0';
-                cdo_debug("Detected vendored compiler: Clang %s at %s", info->version, info->path);
+                cdo_log_debug("Detected vendored compiler: Clang %s at %s", info->version, info->path);
                 return 0;
             }
         }
@@ -219,7 +219,7 @@ int compiler_detect(CompilerInfo* info) {
         // MSVC linker is link.exe
         strncpy(info->linker_path, "link.exe", sizeof(info->linker_path) - 1);
         info->linker_path[sizeof(info->linker_path) - 1] = '\0';
-        cdo_debug("Detected compiler: MSVC %s", info->version);
+        cdo_log_debug("Detected compiler: MSVC %s", info->version);
         return 0;
     }
 
@@ -229,7 +229,7 @@ int compiler_detect(CompilerInfo* info) {
         // GCC acts as linker driver
         strncpy(info->linker_path, info->path, sizeof(info->linker_path) - 1);
         info->linker_path[sizeof(info->linker_path) - 1] = '\0';
-        cdo_debug("Detected compiler: GCC %s", info->version);
+        cdo_log_debug("Detected compiler: GCC %s", info->version);
         return 0;
     }
 
@@ -239,7 +239,7 @@ int compiler_detect(CompilerInfo* info) {
         // Clang acts as linker driver
         strncpy(info->linker_path, info->path, sizeof(info->linker_path) - 1);
         info->linker_path[sizeof(info->linker_path) - 1] = '\0';
-        cdo_debug("Detected compiler: Clang %s", info->version);
+        cdo_log_debug("Detected compiler: Clang %s", info->version);
         return 0;
     }
 
@@ -251,7 +251,7 @@ int compiler_detect(CompilerInfo* info) {
         // GCC acts as linker driver
         strncpy(info->linker_path, info->path, sizeof(info->linker_path) - 1);
         info->linker_path[sizeof(info->linker_path) - 1] = '\0';
-        cdo_debug("Detected compiler: GCC %s", info->version);
+        cdo_log_debug("Detected compiler: GCC %s", info->version);
         return 0;
     }
 
@@ -261,7 +261,7 @@ int compiler_detect(CompilerInfo* info) {
         // Clang acts as linker driver
         strncpy(info->linker_path, info->path, sizeof(info->linker_path) - 1);
         info->linker_path[sizeof(info->linker_path) - 1] = '\0';
-        cdo_debug("Detected compiler: Clang %s", info->version);
+        cdo_log_debug("Detected compiler: Clang %s", info->version);
         return 0;
     }
 #endif
@@ -271,6 +271,6 @@ int compiler_detect(CompilerInfo* info) {
         return 0;
     }
 
-    cdo_warn("No compiler detected on system PATH or vendored tools");
+    cdo_log_warn("No compiler detected on system PATH or vendored tools");
     return -1;
 }

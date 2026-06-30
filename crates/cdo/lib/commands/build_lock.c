@@ -1,5 +1,5 @@
 #include "commands/build_lock.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -39,7 +39,7 @@ int build_lock_acquire(const char* workspace_root, int timeout_sec, BuildLock** 
     // the lock. Skip acquisition and return success with NULL lock handle.
     const char* held = getenv("CDO_BUILD_LOCK_HELD");
     if (held && strcmp(held, "1") == 0) {
-        cdo_debug("build lock already held (re-entrant), skipping acquisition");
+        cdo_log_debug("build lock already held (re-entrant), skipping acquisition");
         return PAL_OK;
     }
 
@@ -52,7 +52,7 @@ int build_lock_acquire(const char* workspace_root, int timeout_sec, BuildLock** 
     // Ensure .cdo directory exists
     int rc = pal_mkdir_p(cdo_dir);
     if (rc != 0) {
-        cdo_error("failed to create .cdo directory: %s", cdo_dir);
+        cdo_log_error("failed to create .cdo directory: %s", cdo_dir);
         return PAL_ERR_IO;
     }
 

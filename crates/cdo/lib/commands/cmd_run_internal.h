@@ -3,7 +3,6 @@
 
 #include "commands/cmd_run.h"
 #include "model/workspace.h"
-#include "core/cli.h"
 #include "pal/pal.h"
 
 #ifdef __cplusplus
@@ -11,8 +10,8 @@ extern "C" {
 #endif
 
 /// Select which crate to run. Returns pointer to crate or NULL on error.
-/// If opts has positional_args[0], uses that; otherwise auto-selects.
-const Crate* run_select_crate(const Workspace* ws, const CdoOptions* opts);
+/// If positional_count > 0, uses positional_values[0]; otherwise auto-selects.
+const Crate* run_select_crate(const Workspace* ws, const char* const* positional_values, int positional_count);
 
 /// Prepare staging folder: clear prior contents, copy exe, DLLs, res/, shd/.
 /// staging_dir: path to .cdo/<crate>/run/

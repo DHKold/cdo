@@ -1,5 +1,5 @@
 #include "model/deps.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "commons/http.h"
 #include "commons/archive.h"
 #include "pal/pal.h"
@@ -63,24 +63,24 @@ static int dep_fetch_registry(const DepSpec* spec, const char* cache_path)
     int n = snprintf(archive_path, sizeof(archive_path), "%s%s", cache_path, ext);
     if (n < 0 || (size_t)n >= sizeof(archive_path)) return -1;
 
-    cdo_info("Downloading %s %s ...", spec->name, spec->version);
+    cdo_log_info("Downloading %s %s ...", spec->name, spec->version);
 
     /* Download the archive */
     int rc = http_download(spec->url, archive_path, 3, NULL, NULL);
     if (rc != 0) {
-        cdo_error("Failed to download dependency '%s' from %s", spec->name, spec->url);
+        cdo_log_error("Failed to download dependency '%s' from %s", spec->name, spec->url);
         return rc;
     }
 
     /* Create the cache directory */
     rc = pal_mkdir_p(cache_path);
     if (rc != 0) {
-        cdo_error("Failed to create cache directory: %s", cache_path);
+        cdo_log_error("Failed to create cache directory: %s", cache_path);
         return rc;
     }
 
     /* Extract the archive */
-    cdo_debug("Extracting %s to %s", archive_path, cache_path);
+    cdo_log_debug("Extracting %s to %s", archive_path, cache_path);
     if (strcmp(ext, ".zip") == 0) {
         rc = archive_extract_zip(archive_path, cache_path);
     } else {
@@ -89,7 +89,7 @@ static int dep_fetch_registry(const DepSpec* spec, const char* cache_path)
     }
 
     if (rc != 0) {
-        cdo_error("Failed to extract archive for dependency '%s'", spec->name);
+        cdo_log_error("Failed to extract archive for dependency '%s'", spec->name);
     }
 
     return rc;
@@ -100,7 +100,7 @@ static int dep_fetch_registry(const DepSpec* spec, const char* cache_path)
  */
 static int dep_fetch_git(const DepSpec* spec, const char* cache_path)
 {
-    cdo_info("Cloning %s (ref: %s) ...", spec->name,
+    cdo_log_info("Cloning %s (ref: %s) ...", spec->name,
              spec->git_ref[0] ? spec->git_ref : "HEAD");
 
     /* Build git clone args */
@@ -125,9 +125,9 @@ static int dep_fetch_git(const DepSpec* spec, const char* cache_path)
     PalSpawnResult result = {0};
     int rc = pal_spawn(&opts, &result);
     if (rc != 0 || result.exit_code != 0) {
-        cdo_error("Git clone failed for dependency '%s'", spec->name);
+        cdo_log_error("Git clone failed for dependency '%s'", spec->name);
         if (result.stderr_buf) {
-            cdo_error("  %s", result.stderr_buf);
+            cdo_log_error("  %s", result.stderr_buf);
         }
         pal_spawn_result_free(&result);
         return -1;
@@ -292,30 +292,30 @@ int dep_resolve(const DepSpec* spec, const char* cache_dir, ResolvedDep* out)
 
     /* For local dependencies, just point to the local path directly */
     if (spec->source == DEP_LOCAL) {
-        cdo_debug("Resolving local dependency '%s' at '%s'", spec->name, spec->url);
+        cdo_log_debug("Resolving local dependency '%s' at '%s'", spec->name, spec->url);
         return dep_populate_resolved(spec->url, out);
     }
 
     /* Compute cache key path */
     if (!cache_dir || cache_dir[0] == '\0') {
-        cdo_error("No cache directory specified for dependency '%s'", spec->name);
+        cdo_log_error("No cache directory specified for dependency '%s'", spec->name);
         return -1;
     }
 
     char cache_path[520];
     if (dep_cache_path(cache_path, sizeof(cache_path),
                        cache_dir, spec->name, spec->version) != 0) {
-        cdo_error("Cache path too long for dependency '%s'", spec->name);
+        cdo_log_error("Cache path too long for dependency '%s'", spec->name);
         return -1;
     }
 
     /* Check if already cached */
     if (dep_cache_valid(cache_path)) {
-        cdo_debug("Using cached dependency '%s' at '%s'", spec->name, cache_path);
+        cdo_log_debug("Using cached dependency '%s' at '%s'", spec->name, cache_path);
         return dep_populate_resolved(cache_path, out);
     }
 
-    /* Not cached — fetch based on source kind */
+    /* Not cached â€” fetch based on source kind */
     int rc;
     switch (spec->source) {
         case DEP_REGISTRY:
@@ -325,7 +325,7 @@ int dep_resolve(const DepSpec* spec, const char* cache_dir, ResolvedDep* out)
             rc = dep_fetch_git(spec, cache_path);
             break;
         default:
-            cdo_error("Unknown dependency source kind for '%s'", spec->name);
+            cdo_log_error("Unknown dependency source kind for '%s'", spec->name);
             return -1;
     }
 

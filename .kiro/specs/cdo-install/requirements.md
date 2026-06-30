@@ -24,16 +24,27 @@ resource files, and shader assets that must ship alongside the executable.
 │   │   ├── my-app.exe         # The actual binary
 │   │   ├── SDL3.dll           # Runtime DLLs (from dependencies)
 │   │   ├── my_engine.dll      # Workspace dyn/ outputs
-│   │   ├── res/               # Resources
-│   │   │   └── config.json
-│   │   └── shd/               # Compiled shaders
-│   │       └── main.dxil
+│   │   ├── config.json        # Resources (placed at app root by default)
+│   │   ├── textures/          # Resource subdirectories preserved
+│   │   │   └── hero.png
+│   │   ├── main.dxil          # Compiled shaders (placed at app root by default)
+│   │   └── effects/           # Shader subdirectories preserved
+│   │       └── bloom.dxil
 │   └── other-tool/
 │       ├── manifest.toml
 │       └── other-tool.exe
 └── bin/
     ├── my-app.cmd             # Launcher: @"%~dp0..\apps\my-app\my-app.exe" %*
     └── other-tool.cmd         # Launcher: @"%~dp0..\apps\other-tool\other-tool.exe" %*
+```
+
+Resources and shaders are placed directly relative to the app directory (not inside
+`res/` or `shd/` subfolders). The base folder is configurable via `crate.toml`:
+
+```toml
+[install]
+resource-base = "."     # default: res/ contents go to app root
+shader-base = "."       # default: compiled shaders go to app root
 ```
 
 On Unix, launchers are shell scripts instead of `.cmd` files:
@@ -65,8 +76,9 @@ exec "$(dirname "$0")/../apps/my-app/my-app" "$@"
 - The exe binary is included
 - All runtime DLLs from external dependencies (resolved via `ResolvedDep.runtime_dlls`) are included
 - All workspace dyn/ module outputs that the crate depends on (transitively) are included
-- The res/ module output (if present) is included as a `res/` subdirectory
-- The shd/ module output (compiled shaders, if present) is included as a `shd/` subdirectory
+- The res/ module output (if present) is included with its contents placed relative to the app directory (not inside a `res/` subfolder). E.g. `res/config.json` → `apps/my-app/config.json`, `res/textures/hero.png` → `apps/my-app/textures/hero.png`
+- The shd/ module output (compiled shaders, if present) follows the same pattern: `shd/effects/bloom.hlsl` → `apps/my-app/effects/bloom.dxil`
+- The base folder for resource and shader placement is configurable via `[install].resource-base` and `[install].shader-base` in `crate.toml` (default: `"."` = app root)
 - The bundle is self-contained: moving the app directory elsewhere still works (DLLs sit next to exe)
 - Reuses the existing staging folder mechanism from `cdo run`
 
@@ -122,6 +134,8 @@ exec "$(dirname "$0")/../apps/my-app/my-app" "$@"
   dlls = ["SDL3.dll", "my_engine.dll"]
   has_resources = true
   has_shaders = true
+  resource_base = "."
+  shader_base = "."
   ```
 - Used by `cdo uninstall` to know what was installed
 - Used to detect reinstall vs new install
@@ -232,3 +246,5 @@ exec "$(dirname "$0")/../apps/my-app/my-app" "$@"
 - On Windows, DLL search order checks the exe's directory first, so DLLs next to the exe are found automatically — no PATH manipulation needed for the app bundle.
 - The `.cmd` wrapper approach is used by npm, Scoop, Chocolatey, and rustup on Windows. It's well-understood and reliable.
 - Version info requires adding an optional `version = "x.y.z"` field to `crate.toml`'s `[crate]` section. The parser should treat it as optional with a "0.0.0" default.
+- Resources and shaders are placed directly relative to the app directory (not in `res/` or `shd/` subfolders). This matches how most applications expect to find their assets — relative to the executable. The base folder is configurable via `[install].resource-base` and `[install].shader-base` in `crate.toml` (both default to `"."`).
+- The same base-folder logic applies to `cdo run` staging, so the app sees identical relative paths during development and after installation.

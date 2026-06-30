@@ -1,0 +1,6 @@
+[crate]
+name = "app"
+
+[dependencies]
+mid = {}
+base = {}

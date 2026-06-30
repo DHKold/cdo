@@ -30,10 +30,12 @@ It reuses the existing staging folder mechanism from `cdo run` to collect all ru
 │   │   ├── my-app.exe             # Executable
 │   │   ├── SDL3.dll               # External dep DLLs
 │   │   ├── my_engine.dll          # Workspace dyn/ outputs
-│   │   ├── res/                   # Resources (from res/ module)
-│   │   │   └── config.json
-│   │   └── shd/                   # Compiled shaders (from shd/ module)
-│   │       └── main.dxil
+│   │   ├── config.json            # Resources (flattened from res/)
+│   │   ├── textures/              # Resource subdirectories preserved
+│   │   │   └── hero.png
+│   │   ├── main.dxil              # Compiled shaders (flattened from shd/)
+│   │   └── effects/               # Shader subdirectories preserved
+│   │       └── bloom.dxil
 │   └── other-tool/
 │       ├── manifest.toml
 │       └── other-tool.exe
@@ -42,12 +44,33 @@ It reuses the existing staging folder mechanism from `cdo run` to collect all ru
     └── other-tool.cmd
 ```
 
+Resources and shaders are placed directly relative to the app directory (default base: `.`).
+This means:
+- A resource file at `res/config.json` becomes `apps/my-app/config.json`
+- A resource at `res/textures/hero.png` becomes `apps/my-app/textures/hero.png`
+- A shader at `shd/main.hlsl` compiles to `apps/my-app/main.dxil`
+- A shader at `shd/effects/bloom.hlsl` compiles to `apps/my-app/effects/bloom.dxil`
+
+The base folder (relative to the app directory) is configurable via `crate.toml`:
+
+```toml
+[install]
+resource-base = "."     # default: resources placed at app root
+shader-base = "."       # default: shaders placed at app root
+```
+
+Setting `resource-base = "data"` would place resources under `apps/my-app/data/` instead.
+Setting `shader-base = "shaders"` would place compiled shaders under `apps/my-app/shaders/`.
+
 ## New Source Files
 
 | File | Purpose |
 |------|---------|
+| `crates/cdo/api/commands/bundle.h` | Public header for shared bundling utility |
+| `crates/cdo/lib/commands/bundle.c` | Shared bundle logic (extracted from cmd_run) |
 | `crates/cdo/api/commands/cmd_install.h` | Public header for install/uninstall commands |
-| `crates/cdo/lib/commands/cmd_install.c` | Install command implementation |
+| `crates/cdo/lib/commands/cmd_install.c` | Install/uninstall command implementation |
+| `crates/cdo/lib/commands/cmd_install_internal.h` | Internal types (InstallManifest, InstallIndexEntry) |
 | `crates/cdo/lib/commands/cmd_install_manifest.c` | Per-app manifest and global index read/write |
 
 ## CLI Interface
@@ -99,8 +122,8 @@ bool global;     // --global flag
    - exe binary
    - dep DLLs (transitive)
    - workspace dyn/ outputs (transitive)
-   - res/ directory contents
-   - shd/ directory contents
+   - res/ directory contents → placed at <resource-base>/ (default: app root)
+   - shd/ directory contents → placed at <shader-base>/ (default: app root)
 7. Resolve install base dir:
    - --path: use provided
    - --global: platform system dir
@@ -149,14 +172,35 @@ The `cdo run` command already has logic to:
 4. Propagate DLLs from dependencies (transitive)
 5. Copy res/ and shd/ outputs
 
-The install command reuses this staging by:
-- Building in release mode
-- Using the same propagation logic to populate a staging dir
-- Then copying the entire staging dir contents to `<apps_dir>/<name>/`
+This logic has been extracted into a shared bundle utility (`bundle.h` / `bundle.c`) that both
+`cmd_run` and `cmd_install` call via `bundle_prepare()`. The old `cmd_run.c` staging functions
+(`run_prepare_staging`, `run_copy_dir_recursive`, `run_select_crate`) now delegate to the
+shared implementations (`bundle_prepare`, `bundle_copy_dir_recursive`, `bundle_select_exe_crate`).
 
-If the staging logic lives in a shared function (e.g., `build_stage_runtime`), both
-`cmd_run` and `cmd_install` can call it. If it's currently embedded in `cmd_run.c`,
-it should be extracted to a shared utility.
+### Resource and Shader Placement
+
+Resources and shaders are **not** placed in `res/` or `shd/` subdirectories in the app bundle.
+Instead, their contents are copied directly relative to the app directory (or a configurable
+base folder).
+
+For `cdo run`, the staging behavior is the same — the exe runs from the staging root, so
+resources placed at the staging root are accessible via relative paths like `"config.json"`
+rather than `"res/config.json"`.
+
+The base folder for each asset type is read from `crate.toml`:
+
+```toml
+[install]
+resource-base = "."     # default: place res/ contents at app root
+shader-base = "."       # default: place compiled shaders at app root
+```
+
+The bundler resolves the effective destination as:
+- `<staging_dir>/<resource-base>/<relative_path_within_res>`
+- `<staging_dir>/<shader-base>/<relative_path_within_shd>`
+
+When `resource-base` is `"."` (default), `res/textures/hero.png` becomes `<staging_dir>/textures/hero.png`.
+When `resource-base` is `"data"`, it becomes `<staging_dir>/data/textures/hero.png`.
 
 ## Per-App Manifest Format (`manifest.toml`)
 
@@ -175,6 +219,8 @@ executable = "my-app.exe"
 dlls = ["SDL3.dll", "my_engine.dll"]
 has_resources = true
 has_shaders = true
+resource_base = "."
+shader_base = "."
 file_count = 15
 total_size_bytes = 4521984
 ```
@@ -275,3 +321,26 @@ if exists:
 - Help text: add install/uninstall descriptions
 - `cmd_run.c`: Extract staging logic into shared utility (or call from install)
 - `crate.toml` parser: support optional `version` field under `[crate]`
+- `crate.toml` parser: support optional `[install]` section with `resource-base` and `shader-base` fields
+
+## Crate Configuration (`crate.toml`)
+
+The `[install]` section is optional. When absent, defaults apply.
+
+```toml
+[crate]
+name = "my-app"
+version = "1.2.0"       # Optional, defaults to "0.0.0"
+
+[install]
+resource-base = "."     # Where res/ contents are placed relative to app dir (default: ".")
+shader-base = "."       # Where compiled shaders are placed relative to app dir (default: ".")
+```
+
+Both `resource-base` and `shader-base` are relative paths from the app directory root.
+A value of `"."` means the contents of `res/` and `shd/` are placed directly at the app root,
+flattening one level of nesting. A value like `"assets"` would create an `assets/` subdirectory
+in the app bundle.
+
+This configuration also applies to `cdo run` staging, ensuring the app sees the same
+relative paths in development and after installation.

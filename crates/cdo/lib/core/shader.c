@@ -1,5 +1,5 @@
 #include "core/shader.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <string.h>
@@ -68,7 +68,7 @@ static int get_basename_no_ext(const char* path, char* buf, size_t buf_size) {
 static bool shader_needs_compile(const char* source_path, const char* output_path) {
     // If output doesn't exist, must compile (Requirement 9.4)
     if (pal_path_exists(output_path) != 0) {
-        cdo_debug("Shader output missing, will compile: %s", source_path);
+        cdo_log_debug("Shader output missing, will compile: %s", source_path);
         return true;
     }
 
@@ -77,25 +77,25 @@ static bool shader_needs_compile(const char* source_path, const char* output_pat
     uint64_t output_mtime = 0;
 
     if (pal_file_mtime(source_path, &source_mtime) != PAL_OK) {
-        // Can't read source mtime — safer to recompile
-        cdo_warn("Cannot read mtime for shader source: %s", source_path);
+        // Can't read source mtime â€” safer to recompile
+        cdo_log_warn("Cannot read mtime for shader source: %s", source_path);
         return true;
     }
 
     if (pal_file_mtime(output_path, &output_mtime) != PAL_OK) {
-        // Can't read output mtime — safer to recompile
-        cdo_warn("Cannot read mtime for shader output: %s", output_path);
+        // Can't read output mtime â€” safer to recompile
+        cdo_log_warn("Cannot read mtime for shader output: %s", output_path);
         return true;
     }
 
     // Skip if source is older than or equal to output (Requirement 9.2)
     if (source_mtime <= output_mtime) {
-        cdo_debug("Shader up-to-date, skipping: %s", source_path);
+        cdo_log_debug("Shader up-to-date, skipping: %s", source_path);
         return false;
     }
 
-    // Source is newer than output — recompile (Requirement 9.3)
-    cdo_debug("Shader source newer than output, will compile: %s", source_path);
+    // Source is newer than output â€” recompile (Requirement 9.3)
+    cdo_log_debug("Shader source newer than output, will compile: %s", source_path);
     return true;
 }
 
@@ -123,23 +123,23 @@ static int invoke_dxc(const char* dxc_path, const char* source_path,
     PalSpawnResult result;
     memset(&result, 0, sizeof(result));
 
-    cdo_debug("DXC: %s -> %s", source_path, output_path);
+    cdo_log_debug("DXC: %s -> %s", source_path, output_path);
 
     int rc = pal_spawn(&opts, &result);
     if (rc != PAL_OK) {
-        cdo_error("Failed to spawn DXC for: %s", source_path);
+        cdo_log_error("Failed to spawn DXC for: %s", source_path);
         pal_spawn_result_free(&result);
         return -1;
     }
 
     if (result.exit_code != 0) {
         if (result.stderr_buf && result.stderr_buf[0] != '\0') {
-            cdo_error("DXC error: %s", result.stderr_buf);
+            cdo_log_error("DXC error: %s", result.stderr_buf);
         }
         if (result.stdout_buf && result.stdout_buf[0] != '\0') {
-            cdo_error("DXC output: %s", result.stdout_buf);
+            cdo_log_error("DXC output: %s", result.stdout_buf);
         }
-        cdo_error("Shader compilation failed: %s (exit code %d)",
+        cdo_log_error("Shader compilation failed: %s (exit code %d)",
                   source_path, result.exit_code);
         pal_spawn_result_free(&result);
         return result.exit_code;
@@ -169,23 +169,23 @@ static int invoke_dxc_with_profile(const char* dxc_path, const char* source_path
     PalSpawnResult result;
     memset(&result, 0, sizeof(result));
 
-    cdo_debug("DXC [%s]: %s -> %s", target_profile, source_path, output_path);
+    cdo_log_debug("DXC [%s]: %s -> %s", target_profile, source_path, output_path);
 
     int rc = pal_spawn(&spawn_opts, &result);
     if (rc != PAL_OK) {
-        cdo_error("Failed to spawn DXC for: %s", source_path);
+        cdo_log_error("Failed to spawn DXC for: %s", source_path);
         pal_spawn_result_free(&result);
         return -1;
     }
 
     if (result.exit_code != 0) {
         if (result.stderr_buf && result.stderr_buf[0] != '\0') {
-            cdo_error("DXC error: %s", result.stderr_buf);
+            cdo_log_error("DXC error: %s", result.stderr_buf);
         }
         if (result.stdout_buf && result.stdout_buf[0] != '\0') {
-            cdo_error("DXC output: %s", result.stdout_buf);
+            cdo_log_error("DXC output: %s", result.stdout_buf);
         }
-        cdo_error("Shader compilation failed: %s (exit code %d)",
+        cdo_log_error("Shader compilation failed: %s (exit code %d)",
                   source_path, result.exit_code);
         pal_spawn_result_free(&result);
         return -1;
@@ -214,7 +214,7 @@ static void shader_walk_callback(const char* path, bool is_dir, void* ctx) {
     // Build output path: output_dir / basename.dxil
     char basename[256];
     if (get_basename_no_ext(path, basename, sizeof(basename)) != 0) {
-        cdo_error("Shader filename too long: %s", path);
+        cdo_log_error("Shader filename too long: %s", path);
         wctx->errors++;
         return;
     }
@@ -225,7 +225,7 @@ static void shader_walk_callback(const char* path, bool is_dir, void* ctx) {
     char output_path[520];
     if (pal_path_join(output_path, sizeof(output_path),
                       wctx->output_dir, output_name) != 0) {
-        cdo_error("Output path too long for shader: %s", path);
+        cdo_log_error("Output path too long for shader: %s", path);
         wctx->errors++;
         return;
     }
@@ -252,19 +252,19 @@ static void shader_walk_callback(const char* path, bool is_dir, void* ctx) {
 int shader_compile(const char* shader_dir, const char* output_dir,
                    const char* dxc_path, int* compiled_count, int* skipped_count) {
     if (!shader_dir || !output_dir || !dxc_path) {
-        cdo_error("shader_compile: NULL argument");
+        cdo_log_error("shader_compile: NULL argument");
         return -1;
     }
 
     // Verify shader directory exists
     if (pal_path_exists(shader_dir) != 0) {
-        cdo_error("Shader directory does not exist: %s", shader_dir);
+        cdo_log_error("Shader directory does not exist: %s", shader_dir);
         return -1;
     }
 
     // Verify DXC binary exists
     if (pal_path_exists(dxc_path) != 0) {
-        cdo_error("DXC binary not found: %s", dxc_path);
+        cdo_log_error("DXC binary not found: %s", dxc_path);
         return -1;
     }
 
@@ -272,7 +272,7 @@ int shader_compile(const char* shader_dir, const char* output_dir,
     if (pal_path_exists(output_dir) != 0) {
         int rc = pal_mkdir_p(output_dir);
         if (rc != 0) {
-            cdo_error("Failed to create shader output directory: %s", output_dir);
+            cdo_log_error("Failed to create shader output directory: %s", output_dir);
             return -1;
         }
     }
@@ -285,12 +285,12 @@ int shader_compile(const char* shader_dir, const char* output_dir,
 
     int rc = pal_dir_walk(shader_dir, shader_walk_callback, &ctx);
     if (rc != PAL_OK) {
-        cdo_error("Failed to walk shader directory: %s", shader_dir);
+        cdo_log_error("Failed to walk shader directory: %s", shader_dir);
         return -1;
     }
 
     // Report counts (Requirement 9.5)
-    cdo_info("Compiled %d shader(s), skipped %d", ctx.compiled, ctx.skipped);
+    cdo_log_info("Compiled %d shader(s), skipped %d", ctx.compiled, ctx.skipped);
 
     // Output counts to caller
     if (compiled_count) *compiled_count = ctx.compiled;
@@ -298,7 +298,7 @@ int shader_compile(const char* shader_dir, const char* output_dir,
 
     // Return error if any shaders failed
     if (ctx.errors > 0) {
-        cdo_error("%d shader(s) failed to compile", ctx.errors);
+        cdo_log_error("%d shader(s) failed to compile", ctx.errors);
         return ctx.errors;
     }
 
@@ -325,7 +325,7 @@ static void shader_walk_ex_callback(const char* path, bool is_dir, void* ctx) {
     // Build output path: output_dir / basename.dxil
     char basename[256];
     if (get_basename_no_ext(path, basename, sizeof(basename)) != 0) {
-        cdo_error("Shader filename too long: %s", path);
+        cdo_log_error("Shader filename too long: %s", path);
         wctx->errors++;
         return;
     }
@@ -336,7 +336,7 @@ static void shader_walk_ex_callback(const char* path, bool is_dir, void* ctx) {
     char output_path[520];
     if (pal_path_join(output_path, sizeof(output_path),
                       wctx->output_dir, output_name) != 0) {
-        cdo_error("Output path too long for shader: %s", path);
+        cdo_log_error("Output path too long for shader: %s", path);
         wctx->errors++;
         return;
     }
@@ -362,7 +362,7 @@ int shader_compile_ex(const ShaderCompileOpts* opts, ShaderCompileResult* result
     ShaderCompileResult local_result = {0};
 
     if (!opts || !opts->shader_dir || !opts->output_dir || !opts->dxc_path) {
-        cdo_error("shader_compile_ex: NULL argument");
+        cdo_log_error("shader_compile_ex: NULL argument");
         return -1;
     }
 
@@ -374,14 +374,14 @@ int shader_compile_ex(const ShaderCompileOpts* opts, ShaderCompileResult* result
 
     // Verify DXC binary exists
     if (pal_path_exists(opts->dxc_path) != 0) {
-        cdo_error("DXC shader compiler not found at: %s", opts->dxc_path);
-        cdo_info("Try: cdo tool install dxc");
+        cdo_log_error("DXC shader compiler not found at: %s", opts->dxc_path);
+        cdo_log_info("Try: cdo tool install dxc");
         return -1;
     }
 
     // Verify shader directory exists
     if (pal_path_exists(opts->shader_dir) != 0) {
-        cdo_error("Shader source directory does not exist: %s", opts->shader_dir);
+        cdo_log_error("Shader source directory does not exist: %s", opts->shader_dir);
         return -1;
     }
 
@@ -389,7 +389,7 @@ int shader_compile_ex(const ShaderCompileOpts* opts, ShaderCompileResult* result
     if (pal_path_exists(opts->output_dir) != 0) {
         int rc = pal_mkdir_p(opts->output_dir);
         if (rc != 0) {
-            cdo_error("Failed to create output directory: %s", opts->output_dir);
+            cdo_log_error("Failed to create output directory: %s", opts->output_dir);
             return -1;
         }
     }
@@ -404,7 +404,7 @@ int shader_compile_ex(const ShaderCompileOpts* opts, ShaderCompileResult* result
 
     int rc = pal_dir_walk(opts->shader_dir, shader_walk_ex_callback, &ctx);
     if (rc != PAL_OK) {
-        cdo_error("Failed to walk shader directory: %s", opts->shader_dir);
+        cdo_log_error("Failed to walk shader directory: %s", opts->shader_dir);
         return -1;
     }
 

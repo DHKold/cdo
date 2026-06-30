@@ -1,5 +1,5 @@
 #include "core/cache.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "commons/checksum.h"
 #include "pal/pal.h"
 
@@ -103,7 +103,7 @@ static int parse_gcc_depfile(const char* content, size_t content_len, StrArray* 
     }
 
     if (!found_colon) {
-        cdo_debug("depfile_parse: no colon found in GCC .d file");
+        cdo_log_debug("depfile_parse: no colon found in GCC .d file");
         return -1;
     }
 
@@ -328,14 +328,14 @@ int cache_compute_key(const CacheKeyInputs* inputs, char* out_key) {
 
     // Requirement 1.2: If dep file is absent, treat as cache miss
     if (!inputs->dep_file_path) {
-        cdo_debug("cache_compute_key: no dep file path, treating as miss");
+        cdo_log_debug("cache_compute_key: no dep file path, treating as miss");
         return -1;
     }
 
     // Hash source file content
     char source_hash[129] = {0};
     if (sha256_file(inputs->source_path, source_hash) != 0) {
-        cdo_debug("cache_compute_key: failed to hash source file '%s'", inputs->source_path);
+        cdo_log_debug("cache_compute_key: failed to hash source file '%s'", inputs->source_path);
         return -1;
     }
 
@@ -343,7 +343,7 @@ int cache_compute_key(const CacheKeyInputs* inputs, char* out_key) {
     char** headers = NULL;
     int header_count = 0;
     if (depfile_parse(inputs->dep_file_path, &headers, &header_count) != 0) {
-        cdo_debug("cache_compute_key: failed to parse dep file '%s'", inputs->dep_file_path);
+        cdo_log_debug("cache_compute_key: failed to parse dep file '%s'", inputs->dep_file_path);
         return -1;
     }
 
@@ -363,7 +363,7 @@ int cache_compute_key(const CacheKeyInputs* inputs, char* out_key) {
     for (int i = 0; i < header_count; i++) {
         // Check if header exists
         if (pal_path_exists(headers[i]) != 0) {
-            cdo_debug("cache_compute_key: header '%s' no longer exists, forcing miss", headers[i]);
+            cdo_log_debug("cache_compute_key: header '%s' no longer exists, forcing miss", headers[i]);
             // Clean up
             for (int j = 0; j < valid_header_count; j++) free(header_pairs[j]);
             free(header_pairs);
@@ -374,7 +374,7 @@ int cache_compute_key(const CacheKeyInputs* inputs, char* out_key) {
 
         char hdr_hash[129] = {0};
         if (sha256_file(headers[i], hdr_hash) != 0) {
-            cdo_debug("cache_compute_key: failed to hash header '%s'", headers[i]);
+            cdo_log_debug("cache_compute_key: failed to hash header '%s'", headers[i]);
             for (int j = 0; j < valid_header_count; j++) free(header_pairs[j]);
             free(header_pairs);
             for (int j = 0; j < header_count; j++) free(headers[j]);
@@ -508,7 +508,7 @@ int cache_compute_key(const CacheKeyInputs* inputs, char* out_key) {
     dynbuf_free(&canonical);
 
     if (rc != 0) {
-        cdo_debug("cache_compute_key: failed to hash canonical string");
+        cdo_log_debug("cache_compute_key: failed to hash canonical string");
         return -1;
     }
 
@@ -534,7 +534,7 @@ int depfile_parse(const char* dep_path, char*** headers, int* count) {
     size_t content_len = 0;
     int rc = pal_file_read(dep_path, &content, &content_len);
     if (rc != 0) {
-        cdo_debug("depfile_parse: failed to read '%s'", dep_path);
+        cdo_log_debug("depfile_parse: failed to read '%s'", dep_path);
         return -1;
     }
 

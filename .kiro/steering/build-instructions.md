@@ -14,12 +14,7 @@ To build a specific crate:
 .\cdo.exe build cdo
 ```
 
-To build and run tests:
-
-```
-.\cdo.exe build cdo_pbt
-.\build\release\cdo_pbt\cdo_pbt.exe
-```
+Note about locking: when a build is in progress, cdo creates a lock to prevent conflicts. Do NOT remove the lock manually unless the process that created the lock no longer exist, but this should not happen normaly as the lock is removed in any case when the build stops (success or failure).
 
 Useful flags:
 
@@ -32,28 +27,12 @@ Useful flags:
 Don't run the `cdo.exe`from the build folder as it may try to compile and write itself, failing due to the file being used.
 If you need to test a build, first copy the cdo.exe as `./cdo_temp.exe`
 
-## Fallback Only: `build.ps1`
-
-The `build.ps1` script is a bootstrap/fallback build that compiles CDo directly with GCC. It does NOT use `cdo.exe` and should ONLY be used when:
-
-- `cdo.exe` does not exist yet (first-time bootstrap)
-- `cdo.exe` is broken and cannot build itself
-
-If you must use it:
-
-```powershell
-powershell -File build.ps1         # Build cdo.exe
-powershell -File build.ps1 -Test   # Build and run tests
-powershell -File build.ps1 -Clean  # Remove build artifacts
-```
-
 ## Key Paths
 
 | Artifact | Path |
 |----------|------|
 | CDo release binary | `build\release\cdo\cdo.exe` |
 | CDo debug binary | `build\debug\cdo\cdo.exe` |
-| Test binary | `build\release\cdo_pbt\cdo_pbt.exe` |
 | Workspace root | (this repo root) |
 
 # CDo Testing framework

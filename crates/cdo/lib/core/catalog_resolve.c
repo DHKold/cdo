@@ -1,9 +1,9 @@
 /*
- * catalog_resolve.c — Catalog resolution and search.
+ * catalog_resolve.c â€” Catalog resolution and search.
  */
 
 #include "core/catalog.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "commons/semver.h"
 
 #include <ctype.h>
@@ -65,8 +65,8 @@ int catalog_resolve_tool(const Catalog* cat, const char* name,
 
     if (version_constraint && version_constraint[0] != '\0') {
         if (semver_constraint_parse(version_constraint, &constraint) != 0) {
-            cdo_error("invalid version constraint '%s'", version_constraint);
-            cdo_info("  supported formats: 1.2.3, ^1.2.3, ~1.2.3, >=1.2.3, <2.0.0, *");
+            cdo_log_error("invalid version constraint '%s'", version_constraint);
+            cdo_log_info("  supported formats: 1.2.3, ^1.2.3, ~1.2.3, >=1.2.3, <2.0.0, *");
             return 1;
         }
         has_constraint = true;
@@ -96,10 +96,10 @@ int catalog_resolve_tool(const Catalog* cat, const char* name,
             }
         }
         if (!name_found) {
-            cdo_error("tool '%s' not found in any loaded catalog", name);
-            cdo_info("  hint: use --url to specify a download URL manually");
+            cdo_log_error("tool '%s' not found in any loaded catalog", name);
+            cdo_log_info("  hint: use --url to specify a download URL manually");
         } else {
-            cdo_error("no version of tool '%s' satisfies constraint '%s'",
+            cdo_log_error("no version of tool '%s' satisfies constraint '%s'",
                       name, version_constraint ? version_constraint : "");
         }
         return 1;
@@ -115,11 +115,11 @@ int catalog_resolve_tool(const Catalog* cat, const char* name,
     }
 
     if (plat_idx < 0) {
-        cdo_error("tool '%s' is not available for platform '%s'",
+        cdo_log_error("tool '%s' is not available for platform '%s'",
                   name, platform->triple);
-        cdo_info("  available platforms:");
+        cdo_log_info("  available platforms:");
         for (int i = 0; i < tool->platform_count; i++) {
-            cdo_info("    - %s", tool->platforms[i].triple);
+            cdo_log_info("    - %s", tool->platforms[i].triple);
         }
         return 1;
     }
@@ -147,8 +147,8 @@ int catalog_resolve_package(const Catalog* cat, const char* name,
 
     if (version_constraint && version_constraint[0] != '\0') {
         if (semver_constraint_parse(version_constraint, &constraint) != 0) {
-            cdo_error("invalid version constraint '%s'", version_constraint);
-            cdo_info("  supported formats: 1.2.3, ^1.2.3, ~1.2.3, >=1.2.3, <2.0.0, *");
+            cdo_log_error("invalid version constraint '%s'", version_constraint);
+            cdo_log_info("  supported formats: 1.2.3, ^1.2.3, ~1.2.3, >=1.2.3, <2.0.0, *");
             return 1;
         }
         has_constraint = true;
@@ -178,7 +178,7 @@ int catalog_resolve_package(const Catalog* cat, const char* name,
             }
         }
         if (!name_found) {
-            cdo_error("package '%s' not found in any loaded catalog", name);
+            cdo_log_error("package '%s' not found in any loaded catalog", name);
             const char* suggestions[5];
             int suggestion_count = 0;
             for (int i = 0; i < cat->package_count && suggestion_count < 5; i++) {
@@ -192,13 +192,13 @@ int catalog_resolve_package(const Catalog* cat, const char* name,
                 if (!dup) suggestions[suggestion_count++] = cat->packages[i].name;
             }
             if (suggestion_count > 0) {
-                cdo_info("  did you mean:");
+                cdo_log_info("  did you mean:");
                 for (int s = 0; s < suggestion_count; s++) {
-                    cdo_info("    - %s", suggestions[s]);
+                    cdo_log_info("    - %s", suggestions[s]);
                 }
             }
         } else {
-            cdo_error("no version of package '%s' satisfies constraint '%s'",
+            cdo_log_error("no version of package '%s' satisfies constraint '%s'",
                       name, version_constraint ? version_constraint : "");
         }
         return 1;
@@ -214,11 +214,11 @@ int catalog_resolve_package(const Catalog* cat, const char* name,
     }
 
     if (plat_idx < 0) {
-        cdo_error("package '%s' is not available for platform '%s'",
+        cdo_log_error("package '%s' is not available for platform '%s'",
                   name, platform->triple);
-        cdo_info("  available platforms:");
+        cdo_log_info("  available platforms:");
         for (int i = 0; i < pkg->platform_count; i++) {
-            cdo_info("    - %s", pkg->platforms[i].triple);
+            cdo_log_info("    - %s", pkg->platforms[i].triple);
         }
         return 1;
     }

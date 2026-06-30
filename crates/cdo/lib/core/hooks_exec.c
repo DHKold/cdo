@@ -1,5 +1,5 @@
 #include "core/hooks_exec.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <string.h>
@@ -31,11 +31,11 @@ static void hook_unsetenv(const char* name) {
 }
 
 // =============================================================================
-// hook_execute — spawn hook command with environment injection and timeout
+// hook_execute â€” spawn hook command with environment injection and timeout
 // =============================================================================
 
 int hook_execute(const HookDef* hook, const HookEnv* env) {
-    if (!hook || !hook->present) return 0; // Absent hook → success
+    if (!hook || !hook->present) return 0; // Absent hook â†’ success
 
     // Inject CDO environment variables into current process (inherited by child)
     if (env) {
@@ -64,8 +64,8 @@ int hook_execute(const HookDef* hook, const HookEnv* env) {
 #endif
 
     // Calculate timeout in milliseconds for PAL
-    // HookDef: timeout_sec == 0 means no timeout → PAL -1 (infinite)
-    // HookDef: timeout_sec > 0  → PAL timeout_sec * 1000
+    // HookDef: timeout_sec == 0 means no timeout â†’ PAL -1 (infinite)
+    // HookDef: timeout_sec > 0  â†’ PAL timeout_sec * 1000
     int timeout_ms;
     if (hook->timeout_sec == 0) {
         timeout_ms = -1; // No timeout
@@ -104,14 +104,14 @@ int hook_execute(const HookDef* hook, const HookEnv* env) {
 
     // Handle timeout (PAL kills the process internally and returns PAL_ERR_TIMEOUT)
     if (spawn_rc == PAL_ERR_TIMEOUT) {
-        cdo_error("Hook '%s' timed out after %d seconds", hook_lifecycle_name(hook->lifecycle), hook->timeout_sec);
+        cdo_log_error("Hook '%s' timed out after %d seconds", hook_lifecycle_name(hook->lifecycle), hook->timeout_sec);
         pal_spawn_result_free(&result);
         return -1;
     }
 
     // Handle spawn failure (e.g., command not found, cwd doesn't exist)
     if (spawn_rc != 0) {
-        cdo_error("Hook '%s' failed to start: error %d (command: %s)", hook_lifecycle_name(hook->lifecycle), spawn_rc, hook->command);
+        cdo_log_error("Hook '%s' failed to start: error %d (command: %s)", hook_lifecycle_name(hook->lifecycle), spawn_rc, hook->command);
         pal_spawn_result_free(&result);
         return -1;
     }
@@ -121,7 +121,7 @@ int hook_execute(const HookDef* hook, const HookEnv* env) {
     pal_spawn_result_free(&result);
 
     if (exit_code != 0) {
-        cdo_error("Hook '%s' failed with exit code %d (command: %s)", hook_lifecycle_name(hook->lifecycle), exit_code, hook->command);
+        cdo_log_error("Hook '%s' failed with exit code %d (command: %s)", hook_lifecycle_name(hook->lifecycle), exit_code, hook->command);
         return exit_code;
     }
 

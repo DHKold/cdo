@@ -1,5 +1,5 @@
 #include "core/cache.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -47,13 +47,13 @@ int cache_init(CacheConfig* config, const char* ws_root) {
 
     // Validate max_size_bytes > 0
     if (config->max_size_bytes <= 0) {
-        cdo_error("Cache: invalid max_size_bytes (%lld), must be > 0", (long long)config->max_size_bytes);
+        cdo_log_error("Cache: invalid max_size_bytes (%lld), must be > 0", (long long)config->max_size_bytes);
         return -1;
     }
 
     // Validate backend
     if (!is_valid_backend(config->backend)) {
-        cdo_error("Cache: invalid backend '%s' (expected 'builtin', 'ccache', or 'sccache')", config->backend);
+        cdo_log_error("Cache: invalid backend '%s' (expected 'builtin', 'ccache', or 'sccache')", config->backend);
         return -1;
     }
 
@@ -61,7 +61,7 @@ int cache_init(CacheConfig* config, const char* ws_root) {
     if (!path_is_absolute(config->path)) {
         char resolved[260];
         if (pal_path_join(resolved, sizeof(resolved), ws_root, config->path) != 0) {
-            cdo_error("Cache: failed to resolve path '%s' relative to '%s'", config->path, ws_root);
+            cdo_log_error("Cache: failed to resolve path '%s' relative to '%s'", config->path, ws_root);
             return -1;
         }
         memcpy(config->path, resolved, sizeof(config->path));
@@ -74,14 +74,14 @@ int cache_init(CacheConfig* config, const char* ws_root) {
     // Create cache directory if it doesn't exist
     if (pal_path_exists(config->path) != 0) {
         if (pal_mkdir_p(config->path) != 0) {
-            cdo_warn("Cache: failed to create cache directory '%s', disabling cache", config->path);
+            cdo_log_warn("Cache: failed to create cache directory '%s', disabling cache", config->path);
             config->enabled = false;
             return -1;
         }
-        cdo_debug("Cache: created directory '%s'", config->path);
+        cdo_log_debug("Cache: created directory '%s'", config->path);
     }
 
-    cdo_debug("Cache: initialized (backend=%s, path=%s, max_size=%lldMB)", config->backend, config->path, (long long)(config->max_size_bytes / (1024 * 1024)));
+    cdo_log_debug("Cache: initialized (backend=%s, path=%s, max_size=%lldMB)", config->backend, config->path, (long long)(config->max_size_bytes / (1024 * 1024)));
     return 0;
 }
 
@@ -119,7 +119,7 @@ int cache_lookup(const CacheConfig* config, const char* key, const char* dest_pa
     // Copy cached object to destination
     if (pal_file_copy(cache_file, dest_path) != 0) {
         // Copy failed (corrupted/truncated): delete the cache entry and report miss
-        cdo_debug("Cache: corrupted entry '%s', removing", cache_file);
+        cdo_log_debug("Cache: corrupted entry '%s', removing", cache_file);
         remove(cache_file);
         return -1;
     }
@@ -142,7 +142,7 @@ int cache_lookup(const CacheConfig* config, const char* key, const char* dest_pa
     }
 #endif
 
-    cdo_debug("Cache: hit for key %.8s... -> %s", key, dest_path);
+    cdo_log_debug("Cache: hit for key %.8s... -> %s", key, dest_path);
     return 0;
 }
 
@@ -158,7 +158,7 @@ int cache_store(const CacheConfig* config, const char* key, const char* obj_path
     // Create subdirectory if it doesn't exist
     if (pal_path_exists(subdir) != 0) {
         if (pal_mkdir_p(subdir) != 0) {
-            cdo_warn("Cache: failed to create subdir '%s'", subdir);
+            cdo_log_warn("Cache: failed to create subdir '%s'", subdir);
             return -1;
         }
     }
@@ -177,15 +177,15 @@ int cache_store(const CacheConfig* config, const char* key, const char* obj_path
 
     // Copy object file to temp location
     if (pal_file_copy(obj_path, tmp_path) != 0) {
-        cdo_warn("Cache: failed to copy '%s' to temp '%s'", obj_path, tmp_path);
+        cdo_log_warn("Cache: failed to copy '%s' to temp '%s'", obj_path, tmp_path);
         return -1;
     }
 
     // Atomic rename temp -> final
     if (rename(tmp_path, final_path) != 0) {
-        // Rename failed — likely target already exists from a parallel store. That's fine.
+        // Rename failed â€” likely target already exists from a parallel store. That's fine.
         remove(tmp_path);
-        cdo_debug("Cache: rename to '%s' failed (parallel store?), cleaned up temp", final_path);
+        cdo_log_debug("Cache: rename to '%s' failed (parallel store?), cleaned up temp", final_path);
     }
 
     return 0;
@@ -313,7 +313,7 @@ int cache_evict(const CacheConfig* config) {
         // If remove fails (file in use, etc.), skip and continue
     }
 
-    cdo_debug("Cache: evicted %d entries, freed %lld bytes", evicted, (long long)freed);
+    cdo_log_debug("Cache: evicted %d entries, freed %lld bytes", evicted, (long long)freed);
 
     free(wctx.entries);
     return 0;
@@ -438,7 +438,7 @@ int cache_clear(const CacheConfig* config) {
 
     // Check if cache directory exists
     if (pal_path_exists(config->path) != 0) {
-        cdo_info("Cache cleared: freed 0 bytes (0 entries)");
+        cdo_log_info("Cache cleared: freed 0 bytes (0 entries)");
         return 0;
     }
 
@@ -448,16 +448,16 @@ int cache_clear(const CacheConfig* config) {
 
     // Remove the entire cache directory tree
     if (pal_rmdir_r(config->path) != 0) {
-        cdo_warn("Cache: failed to remove cache directory '%s'", config->path);
+        cdo_log_warn("Cache: failed to remove cache directory '%s'", config->path);
         return -1;
     }
 
     // Recreate the empty cache directory
     if (pal_mkdir_p(config->path) != 0) {
-        cdo_warn("Cache: failed to recreate cache directory '%s'", config->path);
+        cdo_log_warn("Cache: failed to recreate cache directory '%s'", config->path);
         return -1;
     }
 
-    cdo_info("Cache cleared: freed %lld bytes (%d entries)", (long long)ctx.total_size, ctx.entry_count);
+    cdo_log_info("Cache cleared: freed %lld bytes (%d entries)", (long long)ctx.total_size, ctx.entry_count);
     return 0;
 }

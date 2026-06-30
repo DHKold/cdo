@@ -1,5 +1,5 @@
 #include "commands/test_coverage.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -162,31 +162,31 @@ int coverage_run_gcov(const char *build_dir, FileCoverage *out, int max_files) {
 
     // Check if gcov is available
     if (check_gcov_available() != 0) {
-        cdo_error("gcov not found in PATH. gcov is required for --coverage.");
+        cdo_log_error("gcov not found in PATH. gcov is required for --coverage.");
         return -2;
     }
 
     // Walk the build directory to find all .gcda files
     GcdaFileList *gcda_files = (GcdaFileList *)calloc(1, sizeof(GcdaFileList));
     if (!gcda_files) {
-        cdo_error("out of memory allocating gcda file list");
+        cdo_log_error("out of memory allocating gcda file list");
         return -1;
     }
 
     int rc = pal_dir_walk(build_dir, gcda_walk_callback, gcda_files);
     if (rc != 0) {
-        cdo_debug("pal_dir_walk returned %d for '%s'", rc, build_dir);
+        cdo_log_debug("pal_dir_walk returned %d for '%s'", rc, build_dir);
         free(gcda_files);
         return -1;
     }
 
     if (gcda_files->count == 0) {
-        cdo_debug("no .gcda files found in '%s'", build_dir);
+        cdo_log_debug("no .gcda files found in '%s'", build_dir);
         free(gcda_files);
         return 0;
     }
 
-    cdo_debug("found %d .gcda files in '%s'", gcda_files->count, build_dir);
+    cdo_log_debug("found %d .gcda files in '%s'", gcda_files->count, build_dir);
 
     int total_files = 0;
 
@@ -218,7 +218,7 @@ int coverage_run_gcov(const char *build_dir, FileCoverage *out, int max_files) {
         rc = pal_spawn(&spawn_opts, &spawn_result);
 
         if (rc != 0 || spawn_result.exit_code != 0) {
-            cdo_debug("gcov failed for '%s' (rc=%d, exit=%d)",
+            cdo_log_debug("gcov failed for '%s' (rc=%d, exit=%d)",
                       gcda_files->paths[i], rc, spawn_result.exit_code);
             pal_spawn_result_free(&spawn_result);
             continue;
@@ -258,7 +258,7 @@ double coverage_aggregate(const FileCoverage *files, int count) {
 // Filtered coverage: only workspace sources under <ws_root>/crates/
 // ---------------------------------------------------------------------------
 
-/// Normalize a path buffer in-place: backslash → forward slash.
+/// Normalize a path buffer in-place: backslash â†’ forward slash.
 static void normalize_slashes(char *path) {
     for (char *p = path; *p != '\0'; p++) {
         if (*p == '\\') *p = '/';
@@ -365,7 +365,7 @@ int coverage_run_gcov_filtered(const char *build_dir, const char *ws_root, FileC
 void coverage_display(const FileCoverage *files, int count,
                       double aggregate_pct, bool use_color) {
     if (!files || count <= 0) {
-        cdo_info("Coverage: no source files instrumented");
+        cdo_log_info("Coverage: no source files instrumented");
         return;
     }
 
@@ -376,9 +376,9 @@ void coverage_display(const FileCoverage *files, int count,
     const char *bold = use_color ? "\033[1m" : "";
     const char *reset = use_color ? "\033[0m" : "";
 
-    cdo_info("");
-    cdo_info("%sCoverage Report:%s", bold, reset);
-    cdo_info("%-60s %s", "File", "Lines");
+    cdo_log_info("");
+    cdo_log_info("%sCoverage Report:%s", bold, reset);
+    cdo_log_info("%-60s %s", "File", "Lines");
 
     for (int i = 0; i < count; i++) {
         const char *color;
@@ -390,7 +390,7 @@ void coverage_display(const FileCoverage *files, int count,
             color = red;
         }
 
-        cdo_info("  %-58s %s%5.1f%%%s (%d/%d)",
+        cdo_log_info("  %-58s %s%5.1f%%%s (%d/%d)",
                  files[i].file, color, files[i].pct, reset,
                  files[i].lines_hit, files[i].lines_total);
     }
@@ -405,6 +405,6 @@ void coverage_display(const FileCoverage *files, int count,
         agg_color = red;
     }
 
-    cdo_info("");
-    cdo_info("%sAggregate coverage: %s%.1f%%%s", bold, agg_color, aggregate_pct, reset);
+    cdo_log_info("");
+    cdo_log_info("%sAggregate coverage: %s%.1f%%%s", bold, agg_color, aggregate_pct, reset);
 }

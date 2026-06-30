@@ -1,9 +1,11 @@
 #include "commands/cmd_doctor.h"
 #include "core/compiler.h"
+#include "core/handler_ctx.h"
+#include "cmd/cli_cmd.h"
 #include "model/workspace.h"
 #include "model/deps.h"
 #include "commons/toml.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -23,9 +25,9 @@ typedef enum {
 } CheckResult;
 
 /// Returns true if "--fix" appears in the positional args.
-static bool doctor_has_fix_flag(const CdoOptions* opts) {
-    for (int i = 0; i < opts->positional_count; i++) {
-        if (strcmp(opts->positional_args[i], "--fix") == 0) {
+static bool doctor_has_fix_flag(const CliParseResult* result) {
+    for (int i = 0; i < result->positional_count; i++) {
+        if (strcmp(result->positional_values[i], "--fix") == 0) {
             return true;
         }
     }
@@ -211,8 +213,10 @@ static CheckResult check_tools(const char* root_path) {
     return CHECK_PASS;
 }
 
-int cmd_doctor(const CdoOptions* opts) {
-    bool fix = doctor_has_fix_flag(opts);
+int cmd_doctor(const CliParseResult* result, void* ctx) {
+    (void)ctx;
+
+    bool fix = doctor_has_fix_flag(result);
 
     printf("\n  CDo Doctor - Environment Health Check\n");
     printf("  ======================================\n\n");
@@ -286,3 +290,6 @@ int cmd_doctor(const CdoOptions* opts) {
 
     return (failures == 0) ? 0 : 1;
 }
+
+// ---------------------------------------------------------------------------
+// End of cmd_doctor.c

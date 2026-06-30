@@ -166,6 +166,14 @@ int cli_cmd_completion_script(const CliCmdRegistry* reg, const char* program_nam
 /// Returns number of candidates, or -1 on error.
 int cli_cmd_complete(const CliCmdRegistry* reg, int argc, const char** argv, int cursor_pos, char* buf, int buf_size);
 
+/* --- Suggestion --- */
+
+/// Suggest similar commands for an unrecognized token using Levenshtein distance.
+/// Returns the number of suggestions written to `suggestions[]` (up to max_suggestions).
+/// Each suggestion is a null-terminated string in a 32-byte buffer.
+/// Uses adaptive threshold: max(2, input_length / 2) capped at 3.
+int cli_cmd_suggest(const CliCmdRegistry* reg, const char* input, char suggestions[][32], int max_suggestions);
+
 #ifdef __cplusplus
 }
 #endif

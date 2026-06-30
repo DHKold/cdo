@@ -2,7 +2,7 @@
 #include "core/compiler.h"
 #include "model/scanner.h"
 #include "model/module.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -41,13 +41,13 @@ int build_test_module(const Workspace* ws, Crate* crate,
                       const CacheConfig* cache_config,
                       CacheStats* cache_stats,
                       bool no_cache,
-                      ProgressBar* progress,
+                      CliProgressBar* progress,
                       int* completed_units) {
     if (!crate->modules[MODULE_TST].present) return 0; // Nothing to do
 
     // Req 5.5: Test module requires a Library_Module in the same crate
     if (!crate->has_lib) {
-        cdo_error("crate '%s': tst/ module requires a lib/ module", crate->name);
+        cdo_log_error("crate '%s': tst/ module requires a lib/ module", crate->name);
         return 1;
     }
 
@@ -57,7 +57,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
     FileList sources = {0};
     int rc = scanner_scan_module_sources(tst_mod->dir_path, MODULE_TST, NULL, 0, &sources);
     if (rc != 0) {
-        cdo_error("failed to scan tst/ sources for crate '%s'", crate->name);
+        cdo_log_error("failed to scan tst/ sources for crate '%s'", crate->name);
         return 1;
     }
 
@@ -72,7 +72,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
     }
 
     if (compilable_count == 0) {
-        cdo_info("crate '%s' tst/ module has no compilable source files, skipping",
+        cdo_log_info("crate '%s' tst/ module has no compilable source files, skipping",
                  crate->name);
         filelist_free(&sources);
         return 0;
@@ -89,7 +89,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
                                                 tst_artifact_path, sizeof(tst_artifact_path),
                                                 tst_obj_dir, sizeof(tst_obj_dir));
     if (apath_rc != 0) {
-        cdo_error("failed to compute artifact path for tst/ module in crate '%s'",
+        cdo_log_error("failed to compute artifact path for tst/ module in crate '%s'",
                   crate->name);
         filelist_free(&sources);
         return 1;
@@ -100,7 +100,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
     int inc_count = 0;
     rc = module_include_paths(crate, MODULE_TST, ws, &inc_paths, &inc_count);
     if (rc != 0) {
-        cdo_error("failed to compute include paths for tst/ module in crate '%s'",
+        cdo_log_error("failed to compute include paths for tst/ module in crate '%s'",
                   crate->name);
         filelist_free(&sources);
         return 1;
@@ -166,8 +166,8 @@ int build_test_module(const Workspace* ws, Crate* crate,
         }
 
         // Detect coverage instrumentation mismatch:
-        // - If coverage is requested but .gcno is missing → need to rebuild with instrumentation.
-        // - If coverage is NOT requested but .gcno exists → need to rebuild without instrumentation.
+        // - If coverage is requested but .gcno is missing â†’ need to rebuild with instrumentation.
+        // - If coverage is NOT requested but .gcno exists â†’ need to rebuild without instrumentation.
         if (!needs_rebuild) {
             char gcno_path[260];
             size_t obj_len = strlen(obj_path);
@@ -191,7 +191,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
 
     // --- Compile dirty sources ---
     if (dirty_count > 0) {
-        cdo_info("Compiling tst/ module for crate '%s' (%d files)", crate->name, dirty_count);
+        cdo_log_info("Compiling tst/ module for crate '%s' (%d files)", crate->name, dirty_count);
 
         // Merge crate-level defines with profile defines + CDO_TESTING
         int merged_define_count = build_prof->define_count + crate->define_count + 1;
@@ -213,7 +213,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
         CompileJob* compile_jobs = (CompileJob*)calloc(dirty_count, sizeof(CompileJob));
         char** obj_paths = (char**)calloc(dirty_count, sizeof(char*));
         if (!compile_jobs || !obj_paths) {
-            cdo_error("out of memory allocating compile jobs for tst/ module");
+            cdo_log_error("out of memory allocating compile jobs for tst/ module");
             free(compile_jobs);
             free(obj_paths);
             free(merged_defines);
@@ -232,7 +232,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
 
             obj_paths[d] = (char*)malloc(260);
             if (!obj_paths[d]) {
-                cdo_error("out of memory");
+                cdo_log_error("out of memory");
                 for (int x = 0; x < d; x++) free(obj_paths[x]);
                 free(obj_paths);
                 free(compile_jobs);
@@ -295,7 +295,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
         free(merged_defines);
 
         if (rc != 0) {
-            cdo_error("compilation failed for tst/ module in crate '%s'", crate->name);
+            cdo_log_error("compilation failed for tst/ module in crate '%s'", crate->name);
             free(dirty_indices);
             free(compilable_indices);
             free(all_includes);
@@ -305,13 +305,13 @@ int build_test_module(const Workspace* ws, Crate* crate,
             return 1;
         }
     } else {
-        cdo_info("crate '%s' tst/ module is up to date", crate->name);
+        cdo_log_info("crate '%s' tst/ module is up to date", crate->name);
     }
 
     // Update progress
     if (progress && completed_units) {
         *completed_units += compilable_count;
-        progress_update(progress, *completed_units);
+        cli_out_progress_update(progress, *completed_units);
     }
 
     // --- Link test executable ---
@@ -319,7 +319,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
     const char** link_obj_paths = (const char**)malloc(compilable_count * sizeof(const char*));
     char** link_obj_bufs = (char**)calloc(compilable_count, sizeof(char*));
     if (!link_obj_paths || !link_obj_bufs) {
-        cdo_error("out of memory for link step");
+        cdo_log_error("out of memory for link step");
         free(link_obj_paths);
         free(link_obj_bufs);
         free(dirty_indices);
@@ -474,11 +474,11 @@ int build_test_module(const Workspace* ws, Crate* crate,
         }
     }
 
-    cdo_info("Linking tst/ module: %s", artifact_path);
+    cdo_log_info("Linking tst/ module: %s", artifact_path);
     rc = compiler_link(&link_job, &link_compiler);
 
     if (rc != 0) {
-        cdo_error("linking failed for tst/ module in crate '%s'", crate->name);
+        cdo_log_error("linking failed for tst/ module in crate '%s'", crate->name);
         for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
         free(link_obj_bufs);
         free(link_obj_paths);

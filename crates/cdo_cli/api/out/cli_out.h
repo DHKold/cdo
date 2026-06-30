@@ -67,6 +67,14 @@ void cli_out_line(CliOutCtx* ctx, FILE* stream, CliStyle style, const char* text
 /// Example: cli_out_fmt(ctx, stdout, "{green}Success:{reset} built %d files", count);
 void cli_out_fmt(CliOutCtx* ctx, FILE* stream, const char* fmt, ...);
 
+/* --- Context Queries --- */
+
+/// Query the color level of the output context.
+CliColorLevel cli_out_get_color_level(const CliOutCtx* ctx);
+
+/// Query whether stdout is a TTY from the output context.
+bool cli_out_get_stdout_tty(const CliOutCtx* ctx);
+
 /* --- Emoji / Icon Tokens --- */
 
 /// Write an icon token. If unicode is supported, emits the emoji; otherwise ASCII fallback.

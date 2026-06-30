@@ -1,7 +1,7 @@
 #include "cmd_build_internal.h"
 
 #include "model/module.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -153,7 +153,7 @@ static int propagate_dir(const char* src_dir, const char* dst_dir, const char* k
 
     int rc = pal_dir_walk(norm_src, collect_files_cb, &walk_ctx);
     if (rc != 0 || walk_ctx.error) {
-        cdo_error("dep propagation: failed to walk %s directory '%s'", kind_label, norm_src);
+        cdo_log_error("dep propagation: failed to walk %s directory '%s'", kind_label, norm_src);
         pathlist_free(&files);
         return 1;
     }
@@ -165,7 +165,7 @@ static int propagate_dir(const char* src_dir, const char* dst_dir, const char* k
 
     // Ensure destination directory exists
     if (pal_mkdir_p(dst_dir) != 0) {
-        cdo_error("dep propagation: failed to create directory '%s'", dst_dir);
+        cdo_log_error("dep propagation: failed to create directory '%s'", dst_dir);
         pathlist_free(&files);
         return 1;
     }
@@ -178,7 +178,7 @@ static int propagate_dir(const char* src_dir, const char* dst_dir, const char* k
         // Conflict detection: check if another dep already provided this relative path
         int prior_idx = path_origin_find(seen, rel);
         if (prior_idx >= 0 && prior_idx != dep_crate_idx) {
-            cdo_error("dep propagation: conflict in %s/ — file '%s' provided by both crate '%s' and crate '%s'", kind_label, rel, ws->crates[prior_idx].name, ws->crates[dep_crate_idx].name);
+            cdo_log_error("dep propagation: conflict in %s/ â€” file '%s' provided by both crate '%s' and crate '%s'", kind_label, rel, ws->crates[prior_idx].name, ws->crates[dep_crate_idx].name);
             pathlist_free(&files);
             return 1;
         }
@@ -186,7 +186,7 @@ static int propagate_dir(const char* src_dir, const char* dst_dir, const char* k
         // Record this path as seen from this dep
         if (prior_idx < 0) {
             if (path_origin_add(seen, rel, dep_crate_idx) != 0) {
-                cdo_error("dep propagation: out of memory tracking %s paths", kind_label);
+                cdo_log_error("dep propagation: out of memory tracking %s paths", kind_label);
                 pathlist_free(&files);
                 return 1;
             }
@@ -195,7 +195,7 @@ static int propagate_dir(const char* src_dir, const char* dst_dir, const char* k
         // Compute destination path
         char dst_path[260];
         if (pal_path_join(dst_path, sizeof(dst_path), dst_dir, rel) != 0) {
-            cdo_error("dep propagation: destination path too long for '%s'", rel);
+            cdo_log_error("dep propagation: destination path too long for '%s'", rel);
             pathlist_free(&files);
             return 1;
         }
@@ -219,7 +219,7 @@ static int propagate_dir(const char* src_dir, const char* dst_dir, const char* k
         if (last_slash) {
             *last_slash = '\0';
             if (pal_mkdir_p(parent_dir) != 0) {
-                cdo_error("dep propagation: failed to create directory '%s'", parent_dir);
+                cdo_log_error("dep propagation: failed to create directory '%s'", parent_dir);
                 pathlist_free(&files);
                 return 1;
             }
@@ -227,12 +227,12 @@ static int propagate_dir(const char* src_dir, const char* dst_dir, const char* k
 
         // Copy file
         if (pal_file_copy(src_path, dst_path) != 0) {
-            cdo_error("dep propagation: failed to copy '%s' -> '%s'", src_path, dst_path);
+            cdo_log_error("dep propagation: failed to copy '%s' -> '%s'", src_path, dst_path);
             pathlist_free(&files);
             return 1;
         }
 
-        cdo_debug("dep propagation: copied %s '%s' from crate '%s'", kind_label, rel, ws->crates[dep_crate_idx].name);
+        cdo_log_debug("dep propagation: copied %s '%s' from crate '%s'", kind_label, rel, ws->crates[dep_crate_idx].name);
     }
 
     pathlist_free(&files);
@@ -248,8 +248,8 @@ static int propagate_dir(const char* src_dir, const char* dst_dir, const char* k
 ///
 /// For each resolved dependency (from dep_indices, which already includes
 /// transitive deps resolved by workspace_resolve BFS order):
-///   - If dep has res: copy build/<profile>/<dep>/res/ → build/<profile>/<crate>/res/ (incremental)
-///   - If dep has shd: copy build/<profile>/<dep>/shd/ → build/<profile>/<crate>/shd/ (incremental)
+///   - If dep has res: copy build/<profile>/<dep>/res/ â†’ build/<profile>/<crate>/res/ (incremental)
+///   - If dep has shd: copy build/<profile>/<dep>/shd/ â†’ build/<profile>/<crate>/shd/ (incremental)
 ///   - If dep has dyn: copy DLL/SO to build/<profile>/<crate>/ adjacent to exe
 ///
 /// Excludes exe and tst modules from dependency resolution.
@@ -285,7 +285,7 @@ int propagate_dep_modules(const Workspace* ws, Crate* crate, const char* profile
         // We only propagate res, shd, and dyn. The exe/tst check means we skip
         // propagation from those module types, but dep_indices already only
         // points to crates with lib/api/dyn/res/shd (workspace_resolve handles this).
-        // The exclusion here is about not copying exe/tst artifacts — which we
+        // The exclusion here is about not copying exe/tst artifacts â€” which we
         // simply don't do (we only handle res, shd, dyn below).
 
         // Req 2.3: Propagate resource module output
@@ -320,7 +320,7 @@ int propagate_dep_modules(const Workspace* ws, Crate* crate, const char* profile
             // Compute DLL/SO artifact name for the dep
             char artifact_name[128];
             if (module_artifact_name(dep->name, MODULE_DYN, artifact_name, sizeof(artifact_name)) != 0) {
-                cdo_error("dep propagation: failed to compute DLL artifact name for dep '%s'", dep->name);
+                cdo_log_error("dep propagation: failed to compute DLL artifact name for dep '%s'", dep->name);
                 rc = 1;
                 goto cleanup;
             }
@@ -335,7 +335,7 @@ int propagate_dep_modules(const Workspace* ws, Crate* crate, const char* profile
 
             // Check source exists
             if (pal_path_exists(src_dll) != 0) {
-                cdo_debug("dep propagation: DLL '%s' from dep '%s' not found (not yet built?), skipping", artifact_name, dep->name);
+                cdo_log_debug("dep propagation: DLL '%s' from dep '%s' not found (not yet built?), skipping", artifact_name, dep->name);
                 continue;
             }
 
@@ -350,11 +350,11 @@ int propagate_dep_modules(const Workspace* ws, Crate* crate, const char* profile
 
             if (needs_copy) {
                 if (pal_file_copy(src_dll, dst_dll) != 0) {
-                    cdo_error("dep propagation: failed to copy DLL '%s' -> '%s'", src_dll, dst_dll);
+                    cdo_log_error("dep propagation: failed to copy DLL '%s' -> '%s'", src_dll, dst_dll);
                     rc = 1;
                     goto cleanup;
                 }
-                cdo_debug("dep propagation: copied DLL '%s' from crate '%s'", artifact_name, dep->name);
+                cdo_log_debug("dep propagation: copied DLL '%s' from crate '%s'", artifact_name, dep->name);
             }
         }
     }

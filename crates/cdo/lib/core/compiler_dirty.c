@@ -2,7 +2,7 @@
 #include "core/compiler.h"
 #include "model/scanner.h"
 #include "pal/pal.h"
-#include "core/output.h"
+#include "core/log.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -50,7 +50,7 @@ int compiler_compute_dirty_set(const BuildUnit* units, int unit_count,
 }
 
 // ---------------------------------------------------------------------------
-// compiler_compute_dirty — filesystem-aware incremental compilation
+// compiler_compute_dirty â€” filesystem-aware incremental compilation
 // ---------------------------------------------------------------------------
 
 /// Parse a GCC/Clang-style .d dependency file to extract header dependencies.
@@ -97,7 +97,7 @@ static int parse_depfile(const char* content, size_t len,
                 continue;
             }
             if (p + 1 < end && p[1] == ' ') {
-                // escaped space — part of the filename
+                // escaped space â€” part of the filename
                 if (path_len < (int)sizeof(path_buf) - 1) {
                     path_buf[path_len++] = ' ';
                 }
@@ -120,7 +120,7 @@ static int parse_depfile(const char* content, size_t len,
 
                 // Skip the first entry (the source file itself that also
                 // appears as a dependency in some .d files)
-                // We include all entries — the caller will handle dedup if needed.
+                // We include all entries â€” the caller will handle dedup if needed.
                 if (count >= capacity) {
                     capacity *= 2;
                     char** tmp = (char**)realloc(result, (size_t)capacity * sizeof(char*));
@@ -188,7 +188,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
     memset(&sources, 0, sizeof(sources));
     int rc = scanner_scan_sources(crate->path, NULL, 0, &sources);
     if (rc != 0) {
-        cdo_warn("Failed to scan sources for crate '%s', falling back to full rebuild",
+        cdo_log_warn("Failed to scan sources for crate '%s', falling back to full rebuild",
                  crate->name);
         // Fall back: return empty dirty set (caller should do full rebuild)
         // Actually for fallback, we signal that ALL files are dirty.
@@ -247,7 +247,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
 
         // Get source mtime
         if (pal_file_mtime(src, &u->source_mtime) != PAL_OK) {
-            cdo_warn("Cannot stat source file '%s', triggering full rebuild", src);
+            cdo_log_warn("Cannot stat source file '%s', triggering full rebuild", src);
             fallback_full_rebuild = true;
             break;
         }
@@ -281,7 +281,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
         if (pal_path_exists(obj_path) == 0) {
             u->object_exists = true;
             if (pal_file_mtime(obj_path, &u->object_mtime) != PAL_OK) {
-                cdo_warn("Cannot stat object file '%s', triggering full rebuild", obj_path);
+                cdo_log_warn("Cannot stat object file '%s', triggering full rebuild", obj_path);
                 fallback_full_rebuild = true;
                 break;
             }
@@ -322,7 +322,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
                             if (pal_file_mtime(header_paths[h], &hdr_mtime) == PAL_OK) {
                                 u->header_mtimes[valid_headers++] = hdr_mtime;
                             }
-                            // If a header no longer exists, the file was deleted —
+                            // If a header no longer exists, the file was deleted â€”
                             // this makes the dep file stale, so treat as needing rebuild.
                             // We just won't add it, meaning the source mtime vs object
                             // mtime comparison will still apply.
@@ -341,7 +341,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
                 free(dep_content);
             }
             // If reading/parsing the dep file fails, we just proceed without header
-            // deps — the source mtime check will still catch changes to the source itself.
+            // deps â€” the source mtime check will still catch changes to the source itself.
         }
 
         unit_idx++;
@@ -366,7 +366,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
         }
         *dirty_count = source_count;
         filelist_free(&sources);
-        cdo_debug("Full rebuild triggered for crate '%s' (%d files)", crate->name, source_count);
+        cdo_log_debug("Full rebuild triggered for crate '%s' (%d files)", crate->name, source_count);
         return 0;
     }
 
@@ -381,7 +381,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
 
     int n_dirty = compiler_compute_dirty_set(units, source_count, dirty_out);
     if (n_dirty < 0) {
-        // Error in dirty set computation — fallback to full rebuild
+        // Error in dirty set computation â€” fallback to full rebuild
         free(dirty_out);
         for (int i = 0; i < source_count; i++) free(units[i].header_mtimes);
         free(units);
@@ -412,7 +412,7 @@ int compiler_compute_dirty(const Crate* crate, const char* build_dir,
         free(dirty_out);
     }
 
-    cdo_debug("Dirty set for crate '%s': %d of %d files need rebuild",
+    cdo_log_debug("Dirty set for crate '%s': %d of %d files need rebuild",
               crate->name, *dirty_count, source_count);
     return 0;
 }

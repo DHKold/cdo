@@ -133,3 +133,13 @@ void cli_out_line(CliOutCtx* ctx, FILE* stream, CliStyle style, const char* text
     cli_out_styled(ctx, stream, style, text);
     fputc('\n', stream);
 }
+
+CliColorLevel cli_out_get_color_level(const CliOutCtx* ctx) {
+    if (!ctx) return CLI_COLOR_NONE;
+    return ctx->color_level;
+}
+
+bool cli_out_get_stdout_tty(const CliOutCtx* ctx) {
+    if (!ctx) return false;
+    return ctx->stdout_tty;
+}

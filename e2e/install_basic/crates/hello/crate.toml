@@ -1,0 +1,7 @@
+[crate]
+name = "hello"
+version = "1.0.0"
+
+[install]
+resource-base = "."
+shader-base = "."

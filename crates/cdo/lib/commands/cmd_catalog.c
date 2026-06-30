@@ -1,5 +1,5 @@
 /*
- * cmd_catalog.c — Catalog listing and search command.
+ * cmd_catalog.c â€” Catalog listing and search subcommand handlers.
  *
  * Subcommands:
  *   list [--tools|--packages]  - Display available catalog entries
@@ -8,8 +8,9 @@
 
 #include "commands/cmd_catalog.h"
 #include "core/catalog.h"
-#include "core/output.h"
-#include "core/cli.h"
+#include "core/cli_arg_access.h"
+#include "core/handler_ctx.h"
+#include "core/log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -43,19 +44,11 @@ static void print_package_entry(const CatalogPackageEntry* pkg) {
  * catalog list
  * -------------------------------------------------------------------------- */
 
-static int catalog_list(const CdoOptions* opts) {
-    bool tools_only = false;
-    bool packages_only = false;
+int cmd_catalog_list(const CliParseResult* result, void* ctx) {
+    (void)ctx;
 
-    /* Check for --tools or --packages flags in positional args */
-    for (int i = 1; i < opts->positional_count; i++) {
-        const char* arg = opts->positional_args[i];
-        if (strcmp(arg, "--tools") == 0) {
-            tools_only = true;
-        } else if (strcmp(arg, "--packages") == 0) {
-            packages_only = true;
-        }
-    }
+    bool tools_only = cli_arg_get_bool(result, "tools");
+    bool packages_only = cli_arg_get_bool(result, "packages");
 
     /* Load the catalog */
     Catalog cat;
@@ -104,22 +97,16 @@ static int catalog_list(const CdoOptions* opts) {
  * catalog search
  * -------------------------------------------------------------------------- */
 
-static int catalog_search_cmd(const CdoOptions* opts) {
-    /* The query is the next positional arg after "search" */
-    const char* query = NULL;
+int cmd_catalog_search(const CliParseResult* result, void* ctx) {
+    (void)ctx;
 
-    for (int i = 1; i < opts->positional_count; i++) {
-        const char* arg = opts->positional_args[i];
-        /* Skip flags */
-        if (arg[0] == '-') continue;
-        query = arg;
-        break;
-    }
-
-    if (!query || query[0] == '\0') {
-        cdo_error("usage: cdo catalog search <query>");
+    /* The query is the first positional arg */
+    if (result->positional_count < 1 || result->positional_values[0][0] == '\0') {
+        cdo_log_error("usage: cdo catalog search <query>");
         return 1;
     }
+
+    const char* query = result->positional_values[0];
 
     /* Load the catalog */
     Catalog cat;
@@ -134,9 +121,7 @@ static int catalog_search_cmd(const CdoOptions* opts) {
     int tool_match_count = 0;
     int pkg_match_count = 0;
 
-    catalog_search(&cat, query, false, false,
-                   tool_indices, &tool_match_count,
-                   pkg_indices, &pkg_match_count);
+    catalog_search(&cat, query, false, false, tool_indices, &tool_match_count, pkg_indices, &pkg_match_count);
 
     /* Check for zero results */
     if (tool_match_count == 0 && pkg_match_count == 0) {
@@ -168,27 +153,5 @@ static int catalog_search_cmd(const CdoOptions* opts) {
     return 0;
 }
 
-/* --------------------------------------------------------------------------
- * Public API
- * -------------------------------------------------------------------------- */
-
-int cmd_catalog(const CdoOptions* opts) {
-    if (opts->help || opts->positional_count < 1) {
-        cdo_cli_print_help(CDO_CMD_CATALOG, stdout);
-        return opts->help ? 0 : 1;
-    }
-
-    const char* subcommand = opts->positional_args[0];
-
-    if (strcmp(subcommand, "list") == 0) {
-        return catalog_list(opts);
-    } else if (strcmp(subcommand, "search") == 0) {
-        return catalog_search_cmd(opts);
-    }
-
-    /* Unrecognized subcommand */
-    cdo_error("Unknown subcommand '%s'", subcommand);
-    cdo_info("Available subcommands: list, search");
-    cdo_info("Run 'cdo catalog --help' for usage information.");
-    return 1;
-}
+/* -------------------------------------------------------------------------- */
+// End of cmd_catalog.c

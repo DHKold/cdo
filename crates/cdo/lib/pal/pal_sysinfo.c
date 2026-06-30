@@ -5,7 +5,6 @@
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
-  #include <io.h>
 #else
   #include <unistd.h>
   #include <sys/types.h>
@@ -81,13 +80,5 @@ int pal_get_home_dir(char* buf, size_t buf_size) {
     }
 
     return -1;
-#endif
-}
-
-int pal_is_tty(int fd) {
-#ifdef _WIN32
-    return _isatty(fd) ? 1 : 0;
-#else
-    return isatty(fd) ? 1 : 0;
 #endif
 }

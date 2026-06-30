@@ -3,16 +3,12 @@
  * Validates: Requirements 14.3
  *
  * For any log message at a level other than ERROR, when quiet mode is active
- * (log level = CDO_LOG_ERROR), the output renderer SHALL suppress the message.
+ * (log level = CDO_LOG_LEVEL_ERROR), the output renderer SHALL suppress the message.
  * Only ERROR-level messages SHALL pass through.
  */
 #include "cdo_ut.h"
 #include "vendor/theft.h"
-#include "core/output.h"
-
-/* Test instrumentation functions from output.c (CDO_TESTING build) */
-extern int output_test_get_emit_count(void);
-extern void output_test_reset_emit_count(void);
+#include "core/log.h"
 
 /* Allocate a random non-ERROR log level (WARN, INFO, DEBUG, TRACE) */
 static enum theft_alloc_res
@@ -20,7 +16,7 @@ alloc_non_error_level(struct theft *t, void *env, void **output) {
     (void)env;
     int *level = malloc(sizeof(int));
     if (!level) return THEFT_ALLOC_ERROR;
-    /* Pick from CDO_LOG_WARN(1), CDO_LOG_INFO(2), CDO_LOG_DEBUG(3), CDO_LOG_TRACE(4) */
+    /* Pick from CDO_LOG_LEVEL_WARN(1), CDO_LOG_LEVEL_INFO(2), CDO_LOG_LEVEL_DEBUG(3), CDO_LOG_LEVEL_TRACE(4) */
     *level = (int)(theft_random_choice(t, 4) + 1);
     *output = level;
     return THEFT_ALLOC_OK;
@@ -57,15 +53,15 @@ prop_quiet_mode_suppresses_non_errors(struct theft *t, void *arg1) {
     (void)t;
     int level = *(int *)arg1;
 
-    /* Initialize output in quiet mode (only ERROR passes through) */
-    output_init(CDO_COLOR_NEVER, CDO_LOG_ERROR, false);
-    output_test_reset_emit_count();
+    /* Initialize logging in quiet mode (only ERROR passes through) */
+    cdo_log_init_test(CDO_LOG_LEVEL_ERROR, false, false);
+    cdo_log_test_reset_emit_count();
 
     /* Attempt to log at the non-ERROR level */
-    output_log((CdoLogLevel)level, "test message at level %d", level);
+    cdo_log((CdoLogLevel)level, "test message at level %d", level);
 
     /* In quiet mode, non-ERROR messages must be suppressed */
-    if (output_test_get_emit_count() != 0) {
+    if (cdo_log_test_get_emit_count() != 0) {
         return THEFT_TRIAL_FAIL;
     }
 
@@ -86,10 +82,10 @@ TEST(prop_quiet_mode_filters_non_errors) {
     if (res != THEFT_RUN_PASS) return 1;
 
     /* Part 2: Verify ERROR messages still pass through */
-    output_init(CDO_COLOR_NEVER, CDO_LOG_ERROR, false);
-    output_test_reset_emit_count();
-    output_log(CDO_LOG_ERROR, "this error should pass through");
-    if (output_test_get_emit_count() != 1) return 2;
+    cdo_log_init_test(CDO_LOG_LEVEL_ERROR, false, false);
+    cdo_log_test_reset_emit_count();
+    cdo_log(CDO_LOG_LEVEL_ERROR, "this error should pass through");
+    if (cdo_log_test_get_emit_count() != 1) return 2;
 
     return 0;
 }

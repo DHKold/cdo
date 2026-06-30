@@ -2,7 +2,8 @@
 #include "model/module.h"
 #include "model/scanner.h"
 #include "core/hooks_exec.h"
-#include "commons/output.h"
+#include "core/log.h"
+#include "out/cli_out.h"
 #include "pal/pal.h"
 
 #include <stdlib.h>
@@ -101,13 +102,13 @@ int dag_scheduler_run(DagGraph* graph, const DagSchedulerConfig* config) {
     // Sort the initial ready queue for deterministic dispatch
     ready_queue_sort(&ready, graph);
 
-    cdo_debug("DAG scheduler: %d tasks, %d initially ready, jobs=%d",
+    cdo_log_debug("DAG scheduler: %d tasks, %d initially ready, jobs=%d",
               graph->task_count, ready.count, config->jobs);
 
     // Main loop: process tasks sequentially from the ready queue
     while (completed < graph->task_count) {
         if (ready.count == 0) {
-            // No tasks ready and not all completed — possible deadlock or all remaining are cancelled
+            // No tasks ready and not all completed â€” possible deadlock or all remaining are cancelled
             // Check if all remaining tasks are cancelled
             bool all_done = true;
             for (int i = 0; i < graph->task_count; i++) {
@@ -120,7 +121,7 @@ int dag_scheduler_run(DagGraph* graph, const DagSchedulerConfig* config) {
             }
             if (all_done) break;
 
-            cdo_error("DAG scheduler: deadlock detected - no ready tasks but %d/%d completed",
+            cdo_log_error("DAG scheduler: deadlock detected - no ready tasks but %d/%d completed",
                       completed, graph->task_count);
             ready_queue_free(&ready);
             return -1;
@@ -166,7 +167,7 @@ int dag_scheduler_run(DagGraph* graph, const DagSchedulerConfig* config) {
 
             // Task 17: On failure, finish progress before logging errors
             if (config->progress) {
-                progress_finish(config->progress);
+                cli_out_progress_finish(config->progress);
             }
 
             const Workspace* ws = config->workspace;
@@ -175,13 +176,13 @@ int dag_scheduler_run(DagGraph* graph, const DagSchedulerConfig* config) {
             const char* mod_str = module_kind_to_string(task->module_kind);
 
             if (task->kind == DAG_TASK_COMPILE) {
-                cdo_error("Compilation failed in crate '%s', module %s/: %s",
+                cdo_log_error("Compilation failed in crate '%s', module %s/: %s",
                           crate_name, mod_str, task->source_path);
             } else if (task->kind == DAG_TASK_LINK) {
-                cdo_error("Link failed in crate '%s', module %s/: %s",
+                cdo_log_error("Link failed in crate '%s', module %s/: %s",
                           crate_name, mod_str, task->artifact_path);
             } else {
-                cdo_error("Task failed in crate '%s' (kind=%d)", crate_name, task->kind);
+                cdo_log_error("Task failed in crate '%s' (kind=%d)", crate_name, task->kind);
             }
 
             // Task 16: Cancel all transitive dependents
@@ -198,7 +199,7 @@ int dag_scheduler_run(DagGraph* graph, const DagSchedulerConfig* config) {
             if (task->kind == DAG_TASK_COMPILE) {
                 compile_done++;
                 if (config->progress) {
-                    progress_update(config->progress, compile_done);
+                    cli_out_progress_update(config->progress, compile_done);
                 }
 
                 // Debug log per compile
@@ -206,7 +207,7 @@ int dag_scheduler_run(DagGraph* graph, const DagSchedulerConfig* config) {
                 const char* crate_name = (task->crate_idx >= 0 && task->crate_idx < ws->crate_count)
                     ? ws->crates[task->crate_idx].name : "unknown";
                 const char* mod_str = module_kind_to_string(task->module_kind);
-                cdo_debug("Compiled [%s/%s]: %s", crate_name, mod_str, task->source_path);
+                cdo_log_debug("Compiled [%s/%s]: %s", crate_name, mod_str, task->source_path);
             }
 
             // Propagate readiness to dependents (rdeps)
@@ -230,16 +231,16 @@ int dag_scheduler_run(DagGraph* graph, const DagSchedulerConfig* config) {
     ready_queue_free(&ready);
 
     if (failed_count > 0) {
-        cdo_error("DAG scheduler: %d task(s) failed, %d completed", failed_count, completed);
+        cdo_log_error("DAG scheduler: %d task(s) failed, %d completed", failed_count, completed);
         return 1;
     }
 
-    cdo_debug("DAG scheduler: all %d tasks completed successfully", graph->task_count);
+    cdo_log_debug("DAG scheduler: all %d tasks completed successfully", graph->task_count);
     return 0;
 }
 
 // ---------------------------------------------------------------------------
-// Task 16: Failure Propagation — cancel_dependents
+// Task 16: Failure Propagation â€” cancel_dependents
 // BFS through rdep_ids from the failed task, marking all reachable
 // PENDING/READY tasks as CANCELLED.
 // ---------------------------------------------------------------------------
@@ -304,7 +305,7 @@ static void cancel_dependents(DagGraph* graph, int failed_task_id, int* cancelle
         }
 
         free(crate_seen);
-        cdo_info("Cancelled %d pending tasks in crates: %s", *cancelled_count, crate_names_buf);
+        cdo_log_info("Cancelled %d pending tasks in crates: %s", *cancelled_count, crate_names_buf);
     }
 
     free(bfs_queue);
@@ -353,7 +354,7 @@ static const char* dag_cpp_standard_str(int std_val) {
 static int execute_compile_task(DagTask* task, const DagSchedulerConfig* config) {
     const Workspace* ws = config->workspace;
     if (task->crate_idx < 0 || task->crate_idx >= ws->crate_count) {
-        cdo_error("DAG compile task has invalid crate_idx: %d", task->crate_idx);
+        cdo_log_error("DAG compile task has invalid crate_idx: %d", task->crate_idx);
         return -1;
     }
 
@@ -364,7 +365,7 @@ static int execute_compile_task(DagTask* task, const DagSchedulerConfig* config)
     int inc_count = 0;
     int rc = module_include_paths(crate, task->module_kind, ws, &inc_paths, &inc_count);
     if (rc != 0) {
-        cdo_error("Failed to compute include paths for compile task: %s", task->source_path);
+        cdo_log_error("Failed to compute include paths for compile task: %s", task->source_path);
         return -1;
     }
 
@@ -440,7 +441,7 @@ static int execute_compile_task(DagTask* task, const DagSchedulerConfig* config)
 static int execute_link_task(DagTask* task, DagGraph* graph, const DagSchedulerConfig* config) {
     const Workspace* ws = config->workspace;
     if (task->crate_idx < 0 || task->crate_idx >= ws->crate_count) {
-        cdo_error("DAG link task has invalid crate_idx: %d", task->crate_idx);
+        cdo_log_error("DAG link task has invalid crate_idx: %d", task->crate_idx);
         return -1;
     }
 
@@ -449,7 +450,7 @@ static int execute_link_task(DagTask* task, DagGraph* graph, const DagSchedulerC
     // Collect object paths from the compile tasks this link depends on
     int obj_count = task->compile_task_count;
     if (obj_count <= 0) {
-        cdo_warn("Link task for crate '%s' has no compile tasks", crate->name);
+        cdo_log_warn("Link task for crate '%s' has no compile tasks", crate->name);
         // An empty link is technically valid (creates empty archive)
     }
 
@@ -459,7 +460,7 @@ static int execute_link_task(DagTask* task, DagGraph* graph, const DagSchedulerC
     for (int i = 0; i < obj_count; i++) {
         int compile_id = task->compile_task_ids[i];
         if (compile_id < 0 || compile_id >= graph->task_count) {
-            cdo_error("Link task references invalid compile task id: %d", compile_id);
+            cdo_log_error("Link task references invalid compile task id: %d", compile_id);
             free(obj_paths);
             return -1;
         }
@@ -540,7 +541,7 @@ static int execute_link_task(DagTask* task, DagGraph* graph, const DagSchedulerC
     link_job.link_lib_count = link_lib_count;
     link_job.shared = (task->module_kind == MODULE_DYN);
 
-    cdo_info("Linking %s: %s", module_kind_to_string(task->module_kind), task->artifact_path);
+    cdo_log_info("Linking %s: %s", module_kind_to_string(task->module_kind), task->artifact_path);
     int rc = compiler_link(&link_job, config->compiler);
 
     free(obj_paths);
@@ -548,7 +549,7 @@ static int execute_link_task(DagTask* task, DagGraph* graph, const DagSchedulerC
     free(link_libs);
 
     if (rc != 0) {
-        cdo_error("Linking failed for crate '%s', module %s/",
+        cdo_log_error("Linking failed for crate '%s', module %s/",
                   crate->name, module_kind_to_string(task->module_kind));
     }
 
@@ -594,10 +595,10 @@ static int execute_hook_task(DagTask* task, const DagSchedulerConfig* config) {
     if (rc != 0) {
         const char* lifecycle = (task->kind == DAG_TASK_HOOK_PRE) ? "pre-build" : "post-build";
         if (task->crate_idx >= 0 && task->crate_idx < ws->crate_count) {
-            cdo_error("Crate '%s' %s hook failed",
+            cdo_log_error("Crate '%s' %s hook failed",
                       ws->crates[task->crate_idx].name, lifecycle);
         } else {
-            cdo_error("Workspace %s hook failed", lifecycle);
+            cdo_log_error("Workspace %s hook failed", lifecycle);
         }
     }
     return rc;
@@ -612,7 +613,7 @@ static int execute_resource_task(DagTask* task, const DagSchedulerConfig* config
     (void)config;
     const Workspace* ws = config->workspace;
     if (task->crate_idx >= 0 && task->crate_idx < ws->crate_count) {
-        cdo_debug("Resource task for crate '%s' (no-op in DAG scheduler, handled by integration)",
+        cdo_log_debug("Resource task for crate '%s' (no-op in DAG scheduler, handled by integration)",
                   ws->crates[task->crate_idx].name);
     }
     // TODO: Implement resource copy logic when DAG path is wired into cmd_build
@@ -628,7 +629,7 @@ static int execute_shader_task(DagTask* task, const DagSchedulerConfig* config) 
     (void)config;
     const Workspace* ws = config->workspace;
     if (task->crate_idx >= 0 && task->crate_idx < ws->crate_count) {
-        cdo_debug("Shader task for crate '%s' (no-op in DAG scheduler, handled by integration)",
+        cdo_log_debug("Shader task for crate '%s' (no-op in DAG scheduler, handled by integration)",
                   ws->crates[task->crate_idx].name);
     }
     // TODO: Implement shader compile logic when DAG path is wired into cmd_build

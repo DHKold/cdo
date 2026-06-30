@@ -12,8 +12,27 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Column at which descriptions are aligned */
-#define DESC_COLUMN 20
+/* Default column at which descriptions are aligned */
+#define DESC_COLUMN_DEFAULT 20
+
+/* Minimum terminal width before we stop padding */
+#define MIN_TERM_WIDTH 40
+
+/**
+ * Compute the description alignment column based on terminal width.
+ * For narrow terminals, reduce alignment to avoid squeezing descriptions.
+ * For wide terminals, use the default alignment.
+ */
+static int desc_column_for_width(int term_columns) {
+    if (term_columns <= 0 || term_columns >= 60) {
+        return DESC_COLUMN_DEFAULT;
+    }
+    if (term_columns < MIN_TERM_WIDTH) {
+        return 12;
+    }
+    /* Scale linearly between 12 and 20 for widths 40-60 */
+    return 12 + ((term_columns - MIN_TERM_WIDTH) * 8) / 20;
+}
 
 /* ANSI escape code helpers */
 #define ANSI_BOLD_ON  "\033[1m"
@@ -44,28 +63,28 @@ static int append_header(const char* header, bool colored, char* buf, int remain
 }
 
 /**
- * Append a formatted line with left-aligned name padded to DESC_COLUMN, then description.
+ * Append a formatted line with left-aligned name padded to desc_col, then description.
  * When colored is true, the name portion is wrapped in cyan ANSI codes.
  * Returns number of bytes written, or -1 if buffer is exhausted.
  */
-static int append_padded_line(const char* name, const char* description, bool colored, char* buf, int remaining) {
+static int append_padded_line(const char* name, const char* description, bool colored, int desc_col, char* buf, int remaining) {
     if (remaining <= 0) return -1;
 
     int name_len = (int)strlen(name);
     int written;
 
     if (colored) {
-        if (name_len >= DESC_COLUMN - 2) {
+        if (name_len >= desc_col - 2) {
             written = snprintf(buf, (size_t)remaining, "  " ANSI_CYAN_ON "%s" ANSI_RESET " %s\n", name, description ? description : "");
         } else {
-            int pad = DESC_COLUMN - 2 - name_len;
+            int pad = desc_col - 2 - name_len;
             written = snprintf(buf, (size_t)remaining, "  " ANSI_CYAN_ON "%s" ANSI_RESET "%*s%s\n", name, pad, "", description ? description : "");
         }
     } else {
-        if (name_len >= DESC_COLUMN - 2) {
+        if (name_len >= desc_col - 2) {
             written = snprintf(buf, (size_t)remaining, "  %s %s\n", name, description ? description : "");
         } else {
-            int pad = DESC_COLUMN - 2 - name_len;
+            int pad = desc_col - 2 - name_len;
             written = snprintf(buf, (size_t)remaining, "  %s%*s%s\n", name, pad, "", description ? description : "");
         }
     }
@@ -77,9 +96,10 @@ static int append_padded_line(const char* name, const char* description, bool co
 /**
  * Generate top-level help: list all registered root commands with descriptions.
  */
-static int generate_top_level_help(const CliCmdRegistry* reg, bool colored, char* buf, int buf_size) {
+static int generate_top_level_help(const CliCmdRegistry* reg, bool colored, int term_columns, char* buf, int buf_size) {
     int pos = 0;
     int remaining = buf_size;
+    int desc_col = desc_column_for_width(term_columns);
 
     /* Header */
     int n = append_header("Available commands:\n\n", colored, buf + pos, remaining);
@@ -90,7 +110,7 @@ static int generate_top_level_help(const CliCmdRegistry* reg, bool colored, char
     /* List each root command */
     for (int i = 0; i < reg->command_count; i++) {
         const CliCmdSpec* spec = &reg->root_commands[i].spec;
-        int wrote = append_padded_line(spec->name, spec->description, colored, buf + pos, remaining);
+        int wrote = append_padded_line(spec->name, spec->description, colored, desc_col, buf + pos, remaining);
         if (wrote < 0) return -1;
         pos += wrote;
         remaining -= wrote;
@@ -102,9 +122,10 @@ static int generate_top_level_help(const CliCmdRegistry* reg, bool colored, char
 /**
  * Generate command-specific help: usage synopsis, arguments, and subcommands.
  */
-static int generate_command_help(const CliCmdRegistry* reg, const CliCmdSpec* cmd, bool colored, char* buf, int buf_size) {
+static int generate_command_help(const CliCmdRegistry* reg, const CliCmdSpec* cmd, bool colored, int term_columns, char* buf, int buf_size) {
     int pos = 0;
     int remaining = buf_size;
+    int desc_col = desc_column_for_width(term_columns);
     int n;
 
     /* Usage header (bold when colored) */
@@ -184,7 +205,7 @@ static int generate_command_help(const CliCmdRegistry* reg, const CliCmdSpec* cm
                 snprintf(name_buf, sizeof(name_buf), "    --%s", arg->long_name);
             }
 
-            int wrote = append_padded_line(name_buf, arg->description, false, buf + pos, remaining);
+            int wrote = append_padded_line(name_buf, arg->description, false, desc_col, buf + pos, remaining);
             if (wrote < 0) return -1;
             pos += wrote;
             remaining -= wrote;
@@ -213,7 +234,7 @@ static int generate_command_help(const CliCmdRegistry* reg, const CliCmdSpec* cm
 
         for (int i = 0; i < node->child_count; i++) {
             const CliCmdSpec* child_spec = &node->children[i].spec;
-            int wrote = append_padded_line(child_spec->name, child_spec->description, colored, buf + pos, remaining);
+            int wrote = append_padded_line(child_spec->name, child_spec->description, colored, desc_col, buf + pos, remaining);
             if (wrote < 0) return -1;
             pos += wrote;
             remaining -= wrote;
@@ -230,12 +251,13 @@ int cli_cmd_help(const CliCmdRegistry* reg, const CliCmdSpec* cmd, const CliTerm
 
     buf[0] = '\0';
     bool colored = use_color(term);
+    int term_columns = (term != NULL && term->columns > 0) ? term->columns : 80;
 
     int result;
     if (cmd == NULL) {
-        result = generate_top_level_help(reg, colored, buf, buf_size);
+        result = generate_top_level_help(reg, colored, term_columns, buf, buf_size);
     } else {
-        result = generate_command_help(reg, cmd, colored, buf, buf_size);
+        result = generate_command_help(reg, cmd, colored, term_columns, buf, buf_size);
     }
 
     return result;

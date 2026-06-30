@@ -16,9 +16,11 @@ typedef enum {
     HOOK_POST_BUILD,
     HOOK_PRE_TEST,
     HOOK_POST_TEST,
+    HOOK_PRE_E2E,
+    HOOK_POST_E2E,
 } HookLifecycle;
 
-#define HOOK_LIFECYCLE_COUNT 4
+#define HOOK_LIFECYCLE_COUNT 6
 
 /// A single hook definition.
 typedef struct {

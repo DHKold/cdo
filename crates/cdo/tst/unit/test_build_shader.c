@@ -1,11 +1,13 @@
 // crates/cdo/tst/unit/test_build_shader.c
-// Unit tests for build_shader_module() — the build-integrated shader compilation.
+// Unit tests for build_shader_module() â€” the build-integrated shader compilation.
 // Validates: Requirements 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10
 #include "cdo_ut.h"
 #include "commands/cmd_build_internal.h"
 #include "model/workspace.h"
 #include "model/module.h"
-#include "core/output.h"
+#include "core/log.h"
+#include "out/cli_out.h"
+#include "term/cli_term.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -95,7 +97,7 @@ static int create_fake_dxc_success(const char* dxc_dir) {
     char dxc_path[1024];
 #ifdef _WIN32
     pal_path_join(dxc_path, sizeof(dxc_path), dxc_dir, "dxc.exe");
-    // Create a batch file as the "dxc.exe" — it creates an empty output file
+    // Create a batch file as the "dxc.exe" â€” it creates an empty output file
     // DXC is invoked as: dxc.exe -T lib_6_3 -Fo <output> <source>
     // We write a minimal exe-like cmd script (batch renamed to .exe won't work;
     // but for pal_path_exists it just checks existence)
@@ -137,7 +139,7 @@ static int create_fake_dxc_failure(const char* dxc_dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: DXC missing → error message + non-zero return
+// Test: DXC missing â†’ error message + non-zero return
 // Requirement 4.7
 // ---------------------------------------------------------------------------
 
@@ -146,7 +148,7 @@ TEST_SERIAL(build_shader_module_dxc_missing_returns_nonzero) {
     get_temp_base(root, sizeof(root), "dxc_missing");
     pal_mkdir_p(root);
 
-    // Set up workspace — no DXC at .cdo/tools/dxc/bin/dxc.exe
+    // Set up workspace â€” no DXC at .cdo/tools/dxc/bin/dxc.exe
     Workspace ws;
     setup_workspace(&ws, root);
 
@@ -172,7 +174,7 @@ TEST_SERIAL(build_shader_module_dxc_missing_returns_nonzero) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Incremental — newer source → compiled
+// Test: Incremental â€” newer source â†’ compiled
 // Requirement 4.5
 // ---------------------------------------------------------------------------
 
@@ -207,7 +209,7 @@ TEST_SERIAL(build_shader_module_incremental_newer_source_compiled) {
     pal_path_join(dxil, sizeof(dxil), out_dir, "vertex.hlsl.dxil");
     create_file(dxil, "old_compiled");
 
-    // Source = 2024, output = 2020 → source is newer → should compile
+    // Source = 2024, output = 2020 â†’ source is newer â†’ should compile
     set_mtime(hlsl, 1704067200);   // 2024-01-01
     set_mtime(dxil, 1577836800);   // 2020-01-01
 
@@ -238,7 +240,7 @@ TEST_SERIAL(build_shader_module_incremental_newer_source_compiled) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Incremental — older source → skipped
+// Test: Incremental â€” older source â†’ skipped
 // Requirement 4.5
 // ---------------------------------------------------------------------------
 
@@ -273,7 +275,7 @@ TEST_SERIAL(build_shader_module_incremental_older_source_skipped) {
     pal_path_join(dxil, sizeof(dxil), out_dir, "vertex.hlsl.dxil");
     create_file(dxil, "compiled_output");
 
-    // Source = 2020, output = 2024 → output is newer → should SKIP
+    // Source = 2020, output = 2024 â†’ output is newer â†’ should SKIP
     set_mtime(hlsl, 1577836800);   // 2020-01-01
     set_mtime(dxil, 1704067200);   // 2024-01-01
 
@@ -283,7 +285,7 @@ TEST_SERIAL(build_shader_module_incremental_older_source_skipped) {
     int completed = 0;
     int rc = build_shader_module(&ws, &crate, "debug", NULL, false, NULL, &completed);
 
-    // Output newer than source → shader is skipped → function returns 0 (success, all up to date)
+    // Output newer than source â†’ shader is skipped â†’ function returns 0 (success, all up to date)
     TEST_ASSERT_EQ(rc, 0);
 
     pal_rmdir_r(root);
@@ -291,7 +293,7 @@ TEST_SERIAL(build_shader_module_incremental_older_source_skipped) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Force flag → all compiled regardless of mtime
+// Test: Force flag â†’ all compiled regardless of mtime
 // Requirement 4.6
 // ---------------------------------------------------------------------------
 
@@ -333,11 +335,11 @@ TEST_SERIAL(build_shader_module_force_compiles_regardless) {
     setup_crate_shd(&crate, "testcrate", shd_dir);
 
     int completed = 0;
-    // force=true → should attempt compilation even though output is newer
+    // force=true â†’ should attempt compilation even though output is newer
     int rc = build_shader_module(&ws, &crate, "debug", NULL, true, NULL, &completed);
 
     // With force=true, the function attempts DXC invocation instead of skipping.
-    // On Windows without real DXC, pal_spawn will fail → rc != 0.
+    // On Windows without real DXC, pal_spawn will fail â†’ rc != 0.
     // The key validation: it did NOT return 0 with a skip (which would happen with force=false).
     // If force=false would return 0 (skip), and force=true does not return 0, that proves
     // force overrides the mtime check.
@@ -348,7 +350,7 @@ TEST_SERIAL(build_shader_module_force_compiles_regardless) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Single shader failure → continues, returns non-zero
+// Test: Single shader failure â†’ continues, returns non-zero
 // Requirement 4.8
 // ---------------------------------------------------------------------------
 
@@ -357,7 +359,7 @@ TEST_SERIAL(build_shader_module_single_failure_continues_returns_nonzero) {
     get_temp_base(root, sizeof(root), "fail_continue");
     pal_mkdir_p(root);
 
-    // Create DXC — even though it exists, it will fail to actually execute properly
+    // Create DXC â€” even though it exists, it will fail to actually execute properly
     // (it's an empty file on Windows, not a real executable)
     char dxc_dir[1024];
     pal_path_join(dxc_dir, sizeof(dxc_dir), root, ".cdo/tools/dxc/bin");
@@ -385,7 +387,7 @@ TEST_SERIAL(build_shader_module_single_failure_continues_returns_nonzero) {
     int completed = 0;
     int rc = build_shader_module(&ws, &crate, "debug", NULL, true, NULL, &completed);
 
-    // All shaders will fail (fake DXC is not executable / fails) → returns non-zero
+    // All shaders will fail (fake DXC is not executable / fails) â†’ returns non-zero
     // Requirement 4.8: continues processing all shaders, then returns non-zero
     TEST_ASSERT_NEQ(rc, 0);
 
@@ -394,7 +396,7 @@ TEST_SERIAL(build_shader_module_single_failure_continues_returns_nonzero) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: Empty shd/ → zero counts, returns 0
+// Test: Empty shd/ â†’ zero counts, returns 0
 // Requirement 4.10
 // ---------------------------------------------------------------------------
 
@@ -422,7 +424,7 @@ TEST_SERIAL(build_shader_module_empty_shd_returns_zero) {
     int completed = 0;
     int rc = build_shader_module(&ws, &crate, "debug", NULL, false, NULL, &completed);
 
-    // Requirement 4.10: zero .hlsl files → return 0
+    // Requirement 4.10: zero .hlsl files â†’ return 0
     TEST_ASSERT_EQ(rc, 0);
 
     pal_rmdir_r(root);
@@ -496,7 +498,7 @@ TEST_SERIAL(build_shader_module_nested_directory_structure_preserved) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: has_shd=false → build_shader_module returns 0 immediately
+// Test: has_shd=false â†’ build_shader_module returns 0 immediately
 // (edge case: function is called but crate has no shader module)
 // ---------------------------------------------------------------------------
 
@@ -525,7 +527,7 @@ TEST_SERIAL(build_shader_module_no_shd_module_returns_zero) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: shd/ directory with only non-.hlsl files → zero counts, returns 0
+// Test: shd/ directory with only non-.hlsl files â†’ zero counts, returns 0
 // Requirement 4.10 (no .hlsl files found)
 // ---------------------------------------------------------------------------
 
@@ -559,7 +561,7 @@ TEST_SERIAL(build_shader_module_only_non_hlsl_returns_zero) {
     int completed = 0;
     int rc = build_shader_module(&ws, &crate, "debug", NULL, false, NULL, &completed);
 
-    // No .hlsl files → treated like empty, returns 0
+    // No .hlsl files â†’ treated like empty, returns 0
     TEST_ASSERT_EQ(rc, 0);
 
     pal_rmdir_r(root);
@@ -569,7 +571,7 @@ TEST_SERIAL(build_shader_module_only_non_hlsl_returns_zero) {
 // ---------------------------------------------------------------------------
 // Test: Progress bar is updated (completed_units incremented)
 // The implementation only increments completed_units when BOTH progress and
-// completed_units are non-NULL. We use a real ProgressBar to test this.
+// completed_units are non-NULL. We use a CliProgressBar to test this.
 // ---------------------------------------------------------------------------
 
 TEST_SERIAL(build_shader_module_updates_completed_units) {
@@ -585,7 +587,7 @@ TEST_SERIAL(build_shader_module_updates_completed_units) {
     Workspace ws;
     setup_workspace(&ws, root);
 
-    // Empty shd/ → success path, should increment completed_units
+    // Empty shd/ â†’ success path, should increment completed_units
     char shd_dir[1024];
     pal_path_join(shd_dir, sizeof(shd_dir), root, "crates/testcrate/shd");
     pal_mkdir_p(shd_dir);
@@ -594,14 +596,20 @@ TEST_SERIAL(build_shader_module_updates_completed_units) {
     setup_crate_shd(&crate, "testcrate", shd_dir);
 
     // Create a progress bar so the (progress && completed_units) check passes
-    ProgressBar* progress = progress_create("test", 10);
+    CliTermInfo term = {0};
+    term.stdout_tty = false;
+    term.columns = 80;
+    term.color_level = CLI_COLOR_NONE;
+    CliOutCtx* out_ctx = cli_out_init(&term);
+    CliProgressBar* progress = cli_out_progress_create(out_ctx, "test", 10);
     int completed = 5;
     int rc = build_shader_module(&ws, &crate, "debug", NULL, false, progress, &completed);
     TEST_ASSERT_EQ(rc, 0);
     // completed_units should have been incremented by 1
     TEST_ASSERT_EQ(completed, 6);
 
-    progress_finish(progress);
+    cli_out_progress_finish(progress);
+    cli_out_destroy(out_ctx);
     pal_rmdir_r(root);
     return 0;
 }

@@ -5,8 +5,7 @@
 #include "model/workspace.h"
 #include "core/compiler.h"
 #include "core/cache.h"
-#include "core/output.h"
-#include "core/cli.h"
+#include "out/cli_out.h"
 #include "pal/pal.h"
 
 #include <stdbool.h>
@@ -69,8 +68,8 @@ void object_path_from_source(const char* source, const char* build_dir,
 // Misc utilities
 // ---------------------------------------------------------------------------
 
-/// Determine parallelism level from options.
-int resolve_jobs(const CdoOptions* opts);
+/// Determine parallelism level from a raw jobs value (0 = auto-detect).
+int resolve_jobs_raw(int jobs_value);
 
 /// Copy catalog TOML files from {workspace_root}/catalogs/ to
 /// {build_dir}/catalogs/ so that the built binary can find built-in catalogs
@@ -95,7 +94,7 @@ typedef struct {
     const CacheConfig* cache_config;
     CacheStats*        cache_stats;
     bool               no_cache;
-    ProgressBar*       progress;
+    CliProgressBar*    progress;
     int*               completed_units;
     const char*        crate_full_path;
     const char*        build_dir;
@@ -126,7 +125,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
                                 const CacheConfig* cache_config,
                                 CacheStats* cache_stats,
                                 bool no_cache,
-                                ProgressBar* progress,
+                                CliProgressBar* progress,
                                 int* completed_units);
 
 /// Build the Library_Module for a crate.
@@ -140,7 +139,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
                          const CacheConfig* cache_config,
                          CacheStats* cache_stats,
                          bool no_cache,
-                         ProgressBar* progress,
+                         CliProgressBar* progress,
                          int* completed_units);
 
 /// Build the Executable_Module for a crate.
@@ -154,7 +153,7 @@ int build_executable_module(const Workspace* ws, Crate* crate,
                             const CacheConfig* cache_config,
                             CacheStats* cache_stats,
                             bool no_cache,
-                            ProgressBar* progress,
+                            CliProgressBar* progress,
                             int* completed_units);
 
 /// Build the Test_Module for a crate.
@@ -168,7 +167,7 @@ int build_test_module(const Workspace* ws, Crate* crate,
                       const CacheConfig* cache_config,
                       CacheStats* cache_stats,
                       bool no_cache,
-                      ProgressBar* progress,
+                      CliProgressBar* progress,
                       int* completed_units);
 
 /// Build (copy) the Resource_Module for a crate.
@@ -176,8 +175,25 @@ int build_test_module(const Workspace* ws, Crate* crate,
 /// Removes stale files not present in source.
 int build_resource_module(const Workspace* ws, Crate* crate,
                           const char* profile,
-                          ProgressBar* progress,
+                          CliProgressBar* progress,
                           int* completed_units);
+
+/// Build the E2E_Module for a crate: compile all .c/.cpp files in e2e/
+/// (excluding e2e/fixtures/) into object files, then link against
+/// cdo_ut + cdo_e2e + declared dependencies.
+/// Implicit deps (cdo_ut, cdo_e2e) are added automatically and deduplicated
+/// if already declared. CDO_TESTING define is set.
+/// Returns error if cdo_ut or cdo_e2e is not found in workspace.
+int build_e2e_module(const Workspace* ws, Crate* crate,
+                     const CompilerInfo* compiler,
+                     const char* profile,
+                     const BuildProfile* build_prof,
+                     int jobs,
+                     const CacheConfig* cache_config,
+                     CacheStats* cache_stats,
+                     bool no_cache,
+                     CliProgressBar* progress,
+                     int* completed_units);
 
 /// Build (compile) the Shader_Module for a crate using DXC.
 /// Performs incremental compilation of .hlsl → .dxil.
@@ -185,7 +201,7 @@ int build_shader_module(const Workspace* ws, Crate* crate,
                         const char* profile,
                         const BuildProfile* build_prof,
                         bool force,
-                        ProgressBar* progress,
+                        CliProgressBar* progress,
                         int* completed_units);
 
 /// Propagate dependency module outputs (res, shd, dyn) into the
@@ -221,12 +237,12 @@ static inline const char* cpp_standard_str(int std_val) {
     }
 }
 
-/// Determine the active profile name from options.
-static inline const char* resolve_profile(const CdoOptions* opts) {
-    if (opts->profile && opts->profile[0] != '\0') {
-        return opts->profile;
+/// Determine the active profile name from raw values.
+static inline const char* resolve_profile_raw(bool release, const char* profile) {
+    if (profile && profile[0] != '\0') {
+        return profile;
     }
-    if (opts->release) {
+    if (release) {
         return "release";
     }
     return "debug";

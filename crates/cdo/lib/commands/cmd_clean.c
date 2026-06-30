@@ -1,7 +1,8 @@
 #include "commands/cmd_clean.h"
 #include "core/cache.h"
+#include "core/handler_ctx.h"
 #include "model/workspace.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 #include <string.h>
 
@@ -15,22 +16,46 @@
 
 #define BUILD_DIR "build"
 
+// ---------------------------------------------------------------------------
+// Argument extraction helpers (match main_new.cpp pattern)
+// ---------------------------------------------------------------------------
+
+/// Find a named argument in the parse result. Returns NULL if not found.
+static const CliArgValue* find_arg(const CliParseResult* result, const char* name) {
+    for (int i = 0; i < result->arg_value_count; i++) {
+        if (result->arg_values[i].name && strcmp(result->arg_values[i].name, name) == 0) {
+            return &result->arg_values[i];
+        }
+    }
+    return NULL;
+}
+
+/// Get a bool argument value. Returns false if not present.
+static bool get_arg_bool(const CliParseResult* result, const char* name) {
+    const CliArgValue* v = find_arg(result, name);
+    return (v && v->present && v->type == CLI_ARG_BOOL) ? v->value.bool_val : false;
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
 /// Attempt to remove a directory. Returns 0 on success, 1 on failure.
 /// Prints "Nothing to clean" if the path does not exist.
 static int clean_path(const char* path) {
     int exists = pal_path_exists(path);
     if (exists != 0) {
-        cdo_info("Nothing to clean");
+        cdo_log_info("Nothing to clean");
         return 0;
     }
 
     int rc = pal_rmdir_r(path);
     if (rc != PAL_OK) {
-        cdo_error("Failed to clean '%s'", path);
+        cdo_log_error("Failed to clean '%s'", path);
         return 1;
     }
 
-    cdo_info("Cleaned '%s'", path);
+    cdo_log_info("Cleaned '%s'", path);
     return 0;
 }
 
@@ -38,7 +63,7 @@ static int clean_path(const char* path) {
 static int clean_cache(void) {
     char cwd[260];
     if (get_cwd(cwd, sizeof(cwd)) == NULL) {
-        cdo_error("Failed to get current working directory");
+        cdo_log_error("Failed to get current working directory");
         return 1;
     }
 
@@ -48,12 +73,12 @@ static int clean_cache(void) {
             cache_init(&ws.cache_config, ws.root_path);
             int rc = cache_clear(&ws.cache_config);
             if (rc == 0) {
-                cdo_info("Cleared build cache");
+                cdo_log_info("Cleared build cache");
             } else {
-                cdo_warn("Failed to clear build cache");
+                cdo_log_warn("Failed to clear build cache");
             }
         } else {
-            cdo_info("Cache is disabled, nothing to clear");
+            cdo_log_info("Cache is disabled, nothing to clear");
         }
         workspace_free(&ws);
     } else {
@@ -66,24 +91,33 @@ static int clean_cache(void) {
         cache_init(&default_config, ".");
         int rc = cache_clear(&default_config);
         if (rc == 0) {
-            cdo_info("Cleared build cache");
+            cdo_log_info("Cleared build cache");
         } else {
-            cdo_warn("Failed to clear build cache");
+            cdo_log_warn("Failed to clear build cache");
         }
     }
     return 0;
 }
 
-int cmd_clean(const CdoOptions* opts) {
-    int result = 0;
+// ---------------------------------------------------------------------------
+// New CLI framework handler
+// ---------------------------------------------------------------------------
 
-    if (opts->positional_count > 0) {
+int cmd_clean(const CliParseResult* result, void* ctx) {
+    (void)ctx; // CdoHandlerCtx* â€” not used directly yet (output goes through global)
+
+    // Extract args from CliParseResult
+    bool cache_flag = get_arg_bool(result, "cache");
+
+    int overall_result = 0;
+
+    if (result->positional_count > 0) {
         // Clean specific crate(s)
-        for (int i = 0; i < opts->positional_count; i++) {
+        for (int i = 0; i < result->positional_count; i++) {
             char path[1024];
-            int join_rc = pal_path_join(path, sizeof(path), BUILD_DIR, opts->positional_args[i]);
+            int join_rc = pal_path_join(path, sizeof(path), BUILD_DIR, result->positional_values[i]);
             if (join_rc != 0) {
-                cdo_error("Path too long for crate '%s'", opts->positional_args[i]);
+                cdo_log_error("Path too long for crate '%s'", result->positional_values[i]);
                 return 1;
             }
             int rc = clean_path(path);
@@ -93,16 +127,19 @@ int cmd_clean(const CdoOptions* opts) {
         }
     } else {
         // Clean entire build directory
-        result = clean_path(BUILD_DIR);
+        overall_result = clean_path(BUILD_DIR);
     }
 
     // If --cache flag present, also clear the build cache
-    if (opts->cache) {
+    if (cache_flag) {
         int cache_rc = clean_cache();
-        if (cache_rc != 0 && result == 0) {
-            result = cache_rc;
+        if (cache_rc != 0 && overall_result == 0) {
+            overall_result = cache_rc;
         }
     }
 
-    return result;
+    return overall_result;
 }
+
+// ---------------------------------------------------------------------------
+// End of cmd_clean.c

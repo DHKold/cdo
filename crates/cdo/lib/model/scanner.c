@@ -476,6 +476,7 @@ static const char* MODULE_DIR_NAMES[MODULE_KIND_COUNT] = {
     "api",  // MODULE_API
     "res",  // MODULE_RES
     "shd",  // MODULE_SHD
+    "e2e",  // MODULE_E2E
 };
 
 int scanner_scan_modules(const char* crate_path, Crate* crate,
@@ -507,12 +508,25 @@ int scanner_scan_modules(const char* crate_path, Crate* crate,
             // artifact_path left empty for now (computed during build)
             crate->modules[i].artifact_path[0] = '\0';
 
-            // Scan source files for compilable modules (lib, exe, dyn, tst)
+            // Scan source files for compilable modules (lib, exe, dyn, tst, e2e)
             if (i == MODULE_LIB || i == MODULE_EXE || i == MODULE_DYN || i == MODULE_TST) {
                 FileList fl = {0};
                 int scan_rc = scanner_scan_module_sources(dir_path, i, exclude_patterns, exclude_count, &fl);
                 if (scan_rc == 0) {
                     crate->modules[i].sources = fl;
+                }
+            } else if (i == MODULE_E2E) {
+                // Scan e2e/ for .c/.cpp sources, excluding the fixtures/ subtree
+                static const char* e2e_excludes[] = { "fixtures/**" };
+                FileList fl = {0};
+                int scan_rc = scanner_scan_module_sources(dir_path, i, e2e_excludes, 1, &fl);
+                if (scan_rc == 0) {
+                    crate->modules[i].sources = fl;
+                    // If no compilable sources found outside fixtures/, mark as not present (Req 1.1, 1.7)
+                    if (fl.count == 0) {
+                        crate->modules[i].present = false;
+                        module_count--;
+                    }
                 }
             } else if (i == MODULE_RES) {
                 FileList fl;
@@ -593,6 +607,7 @@ int scanner_scan_modules(const char* crate_path, Crate* crate,
     crate->has_api = crate->modules[MODULE_API].present;
     crate->has_res = crate->modules[MODULE_RES].present;
     crate->has_shd = crate->modules[MODULE_SHD].present;
+    crate->has_e2e = crate->modules[MODULE_E2E].present;
 
     // Error if no module directories found
     if (module_count == 0) {

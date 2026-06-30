@@ -2,7 +2,7 @@
 #include "model/workspace.h"
 #include "model/module.h"
 #include "pal/pal.h"
-#include "commons/output.h"
+#include "core/log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -17,7 +17,7 @@ static int dag_task_add(DagGraph* graph, DagTaskKind kind, int crate_idx, Module
         if (new_cap < 16) new_cap = 16;
         DagTask* new_tasks = (DagTask*)realloc(graph->tasks, (size_t)new_cap * sizeof(DagTask));
         if (!new_tasks) {
-            cdo_error("dag_task_add: failed to grow task array to %d", new_cap);
+            cdo_log_error("dag_task_add: failed to grow task array to %d", new_cap);
             return -1;
         }
         graph->tasks = new_tasks;
@@ -46,7 +46,7 @@ static int dag_task_add(DagGraph* graph, DagTaskKind kind, int crate_idx, Module
     task->compile_task_count = 0;
 
     graph->task_count++;
-    cdo_trace("dag_task_add: id=%d kind=%d crate_idx=%d module_kind=%d", id, kind, crate_idx, module_kind);
+    cdo_log_trace("dag_task_add: id=%d kind=%d crate_idx=%d module_kind=%d", id, kind, crate_idx, module_kind);
     return id;
 }
 
@@ -54,11 +54,11 @@ static int dag_task_add(DagGraph* graph, DagTaskKind kind, int crate_idx, Module
 /// Grows the dep_ids array if needed.
 static void dag_task_add_dep(DagGraph* graph, int task_id, int dep_task_id) {
     if (task_id < 0 || task_id >= graph->task_count) {
-        cdo_error("dag_task_add_dep: invalid task_id %d (count=%d)", task_id, graph->task_count);
+        cdo_log_error("dag_task_add_dep: invalid task_id %d (count=%d)", task_id, graph->task_count);
         return;
     }
     if (dep_task_id < 0 || dep_task_id >= graph->task_count) {
-        cdo_error("dag_task_add_dep: invalid dep_task_id %d (count=%d)", dep_task_id, graph->task_count);
+        cdo_log_error("dag_task_add_dep: invalid dep_task_id %d (count=%d)", dep_task_id, graph->task_count);
         return;
     }
 
@@ -69,7 +69,7 @@ static void dag_task_add_dep(DagGraph* graph, int task_id, int dep_task_id) {
         if (new_cap < 4) new_cap = 4;
         int* new_deps = (int*)realloc(task->dep_ids, (size_t)new_cap * sizeof(int));
         if (!new_deps) {
-            cdo_error("dag_task_add_dep: failed to grow dep array for task %d", task_id);
+            cdo_log_error("dag_task_add_dep: failed to grow dep array for task %d", task_id);
             return;
         }
         task->dep_ids = new_deps;
@@ -78,7 +78,7 @@ static void dag_task_add_dep(DagGraph* graph, int task_id, int dep_task_id) {
 
     task->dep_ids[task->dep_count] = dep_task_id;
     task->dep_count++;
-    cdo_trace("dag_task_add_dep: task %d depends on task %d", task_id, dep_task_id);
+    cdo_log_trace("dag_task_add_dep: task %d depends on task %d", task_id, dep_task_id);
 }
 
 // --- Internal helper: add reverse edge ---
@@ -89,7 +89,7 @@ static void dag_task_add_rdep(DagTask* task, int rdep_task_id) {
         if (new_cap < 4) new_cap = 4;
         int* new_rdeps = (int*)realloc(task->rdep_ids, (size_t)new_cap * sizeof(int));
         if (!new_rdeps) {
-            cdo_error("dag_task_add_rdep: failed to grow rdep array for task %d", task->id);
+            cdo_log_error("dag_task_add_rdep: failed to grow rdep array for task %d", task->id);
             return;
         }
         task->rdep_ids = new_rdeps;
@@ -106,13 +106,13 @@ DagGraph* dag_graph_create(int initial_capacity) {
 
     DagGraph* graph = (DagGraph*)malloc(sizeof(DagGraph));
     if (!graph) {
-        cdo_error("dag_graph_create: failed to allocate DagGraph");
+        cdo_log_error("dag_graph_create: failed to allocate DagGraph");
         return NULL;
     }
 
     graph->tasks = (DagTask*)malloc((size_t)initial_capacity * sizeof(DagTask));
     if (!graph->tasks) {
-        cdo_error("dag_graph_create: failed to allocate task array (capacity=%d)", initial_capacity);
+        cdo_log_error("dag_graph_create: failed to allocate task array (capacity=%d)", initial_capacity);
         free(graph);
         return NULL;
     }
@@ -120,7 +120,7 @@ DagGraph* dag_graph_create(int initial_capacity) {
     graph->task_count = 0;
     graph->task_capacity = initial_capacity;
 
-    cdo_debug("dag_graph_create: allocated graph with capacity %d", initial_capacity);
+    cdo_log_debug("dag_graph_create: allocated graph with capacity %d", initial_capacity);
     return graph;
 }
 
@@ -136,13 +136,13 @@ void dag_graph_free(DagGraph* graph) {
 
     free(graph->tasks);
     free(graph);
-    cdo_trace("dag_graph_free: freed graph");
+    cdo_log_trace("dag_graph_free: freed graph");
 }
 
 void dag_graph_finalize(DagGraph* graph) {
     if (!graph) return;
 
-    cdo_debug("dag_graph_finalize: computing reverse edges for %d tasks", graph->task_count);
+    cdo_log_debug("dag_graph_finalize: computing reverse edges for %d tasks", graph->task_count);
 
     // For each task, iterate its dep_ids and add reverse edges to the dependent tasks
     for (int i = 0; i < graph->task_count; i++) {
@@ -164,7 +164,7 @@ void dag_graph_finalize(DagGraph* graph) {
         }
     }
 
-    cdo_debug("dag_graph_finalize: done. %d tasks ready (0 deps), %d total tasks", ready_count, graph->task_count);
+    cdo_log_debug("dag_graph_finalize: done. %d tasks ready (0 deps), %d total tasks", ready_count, graph->task_count);
 }
 
 int dag_graph_task_count_by_kind(const DagGraph* graph, DagTaskKind kind) {
@@ -180,7 +180,7 @@ int dag_graph_task_count_by_kind(const DagGraph* graph, DagTaskKind kind) {
 }
 
 // ---------------------------------------------------------------------------
-// dag_generate — Build the DAG from a resolved workspace
+// dag_generate â€” Build the DAG from a resolved workspace
 // ---------------------------------------------------------------------------
 
 /// Compute object path from a source file: takes the basename, replaces extension with .o,
@@ -217,7 +217,7 @@ static bool dag_is_compilable_source(const char* path) {
 
 int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
     if (!ws || !profile || !out) {
-        cdo_error("dag_generate: NULL argument (ws=%p, profile=%p, out=%p)", (const void*)ws, (const void*)profile, (void*)out);
+        cdo_log_error("dag_generate: NULL argument (ws=%p, profile=%p, out=%p)", (const void*)ws, (const void*)profile, (void*)out);
         return -1;
     }
 
@@ -227,14 +227,14 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
 
     DagGraph* graph = dag_graph_create(estimated_capacity);
     if (!graph) {
-        cdo_error("dag_generate: failed to create graph");
+        cdo_log_error("dag_generate: failed to create graph");
         return -1;
     }
 
     // Mapping: crate_idx -> lib link task ID (-1 if none)
     int* lib_link_ids = (int*)malloc((size_t)ws->crate_count * sizeof(int));
     if (!lib_link_ids) {
-        cdo_error("dag_generate: failed to allocate lib_link_ids array");
+        cdo_log_error("dag_generate: failed to allocate lib_link_ids array");
         dag_graph_free(graph);
         return -1;
     }
@@ -245,7 +245,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
     // Track crate post-hook task IDs for the workspace post-hook
     int* crate_post_hook_ids = (int*)malloc((size_t)ws->crate_count * sizeof(int));
     if (!crate_post_hook_ids) {
-        cdo_error("dag_generate: failed to allocate crate_post_hook_ids array");
+        cdo_log_error("dag_generate: failed to allocate crate_post_hook_ids array");
         free(lib_link_ids);
         dag_graph_free(graph);
         return -1;
@@ -260,7 +260,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
         ws_pre_hook_id = dag_task_add(graph, DAG_TASK_HOOK_PRE, -1, MODULE_API);
         if (ws_pre_hook_id >= 0) {
             graph->tasks[ws_pre_hook_id].hook_def = ws->ws_hooks.hooks[HOOK_PRE_BUILD];
-            cdo_debug("dag_generate: added workspace pre-build hook (task %d)", ws_pre_hook_id);
+            cdo_log_debug("dag_generate: added workspace pre-build hook (task %d)", ws_pre_hook_id);
         }
     }
 
@@ -271,7 +271,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
         int crate_idx = ws->build_order[bo];
         const Crate* crate = &ws->crates[crate_idx];
 
-        cdo_debug("dag_generate: processing crate '%s' (idx=%d)", crate->name, crate_idx);
+        cdo_log_debug("dag_generate: processing crate '%s' (idx=%d)", crate->name, crate_idx);
 
         // Track all tasks created for this crate (for post-hook dependencies)
         int* crate_task_ids = (int*)malloc(256 * sizeof(int));
@@ -301,7 +301,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
                     dag_task_add_dep(graph, crate_pre_id, ws_pre_hook_id);
                 }
                 CRATE_TASK_PUSH(crate_pre_id);
-                cdo_trace("dag_generate: crate '%s' pre-hook task %d", crate->name, crate_pre_id);
+                cdo_log_trace("dag_generate: crate '%s' pre-hook task %d", crate->name, crate_pre_id);
             }
         }
 
@@ -328,7 +328,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
 
             lib_compile_ids_arr = (int*)malloc((size_t)lib_mod->sources.count * sizeof(int));
             if (!lib_compile_ids_arr) {
-                cdo_error("dag_generate: failed to allocate lib compile ids for crate '%s'", crate->name);
+                cdo_log_error("dag_generate: failed to allocate lib compile ids for crate '%s'", crate->name);
                 free(crate_task_ids);
                 free(lib_link_ids);
                 free(crate_post_hook_ids);
@@ -357,7 +357,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
                 CRATE_TASK_PUSH(task_id);
             }
 
-            cdo_debug("dag_generate: crate '%s' lib/ -> %d compile tasks", crate->name, lib_compile_count);
+            cdo_log_debug("dag_generate: crate '%s' lib/ -> %d compile tasks", crate->name, lib_compile_count);
         }
 
         // --- 2c: lib/ link task ---
@@ -399,7 +399,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
 
                 lib_link_ids[crate_idx] = lib_link_id;
                 CRATE_TASK_PUSH(lib_link_id);
-                cdo_debug("dag_generate: crate '%s' lib/ link task %d (artifact: %s)", crate->name, lib_link_id, link_task->artifact_path);
+                cdo_log_debug("dag_generate: crate '%s' lib/ link task %d (artifact: %s)", crate->name, lib_link_id, link_task->artifact_path);
             }
         }
 
@@ -428,7 +428,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
             int* mod_compile_ids = (int*)malloc((size_t)mod->sources.count * sizeof(int));
             int mod_compile_count = 0;
             if (!mod_compile_ids) {
-                cdo_error("dag_generate: failed to allocate compile ids for crate '%s' module %s", crate->name, kind_str);
+                cdo_log_error("dag_generate: failed to allocate compile ids for crate '%s' module %s", crate->name, kind_str);
                 continue;
             }
 
@@ -458,7 +458,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
                 CRATE_TASK_PUSH(task_id);
             }
 
-            cdo_debug("dag_generate: crate '%s' %s/ -> %d compile tasks", crate->name, kind_str, mod_compile_count);
+            cdo_log_debug("dag_generate: crate '%s' %s/ -> %d compile tasks", crate->name, kind_str, mod_compile_count);
 
             // Module link task
             char artifact_path[260];
@@ -501,7 +501,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
                 }
 
                 CRATE_TASK_PUSH(mod_link_id);
-                cdo_debug("dag_generate: crate '%s' %s/ link task %d (artifact: %s)", crate->name, kind_str, mod_link_id, link_task->artifact_path);
+                cdo_log_debug("dag_generate: crate '%s' %s/ link task %d (artifact: %s)", crate->name, kind_str, mod_link_id, link_task->artifact_path);
             }
 
             free(mod_compile_ids);
@@ -515,7 +515,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
                     dag_task_add_dep(graph, shd_id, crate_pre_id);
                 }
                 CRATE_TASK_PUSH(shd_id);
-                cdo_trace("dag_generate: crate '%s' shader task %d", crate->name, shd_id);
+                cdo_log_trace("dag_generate: crate '%s' shader task %d", crate->name, shd_id);
             }
         }
 
@@ -527,7 +527,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
                     dag_task_add_dep(graph, res_id, crate_pre_id);
                 }
                 CRATE_TASK_PUSH(res_id);
-                cdo_trace("dag_generate: crate '%s' resource task %d", crate->name, res_id);
+                cdo_log_trace("dag_generate: crate '%s' resource task %d", crate->name, res_id);
             }
         }
 
@@ -543,7 +543,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
                 }
 
                 crate_post_hook_ids[crate_post_hook_count++] = crate_post_id;
-                cdo_trace("dag_generate: crate '%s' post-hook task %d (depends on %d crate tasks)", crate->name, crate_post_id, crate_task_count);
+                cdo_log_trace("dag_generate: crate '%s' post-hook task %d (depends on %d crate tasks)", crate->name, crate_post_id, crate_task_count);
             }
         }
 
@@ -563,7 +563,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
             for (int i = 0; i < crate_post_hook_count; i++) {
                 dag_task_add_dep(graph, ws_post_id, crate_post_hook_ids[i]);
             }
-            cdo_debug("dag_generate: workspace post-hook task %d (depends on %d crate post-hooks)", ws_post_id, crate_post_hook_count);
+            cdo_log_debug("dag_generate: workspace post-hook task %d (depends on %d crate post-hooks)", ws_post_id, crate_post_hook_count);
         }
     }
 
@@ -575,7 +575,7 @@ int dag_generate(const Workspace* ws, const char* profile, DagGraph** out) {
     free(lib_link_ids);
     free(crate_post_hook_ids);
 
-    cdo_info("DAG generated: %d tasks, %d compile, %d link", graph->task_count, dag_graph_task_count_by_kind(graph, DAG_TASK_COMPILE), dag_graph_task_count_by_kind(graph, DAG_TASK_LINK));
+    cdo_log_info("DAG generated: %d tasks, %d compile, %d link", graph->task_count, dag_graph_task_count_by_kind(graph, DAG_TASK_COMPILE), dag_graph_task_count_by_kind(graph, DAG_TASK_LINK));
 
     *out = graph;
     return 0;

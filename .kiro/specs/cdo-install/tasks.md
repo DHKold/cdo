@@ -1,219 +1,140 @@
-# Feature 9: `cdo install` — Implementation Tasks
+# Implementation Plan: `cdo install` — System-Wide Binary Installation
 
-## Task 1: CLI Infrastructure
+## Overview
 
-- [ ] Add `CDO_CMD_INSTALL` and `CDO_CMD_UNINSTALL` to `CdoCommand` enum in `cli.h`
-- [ ] Add `force` and `global` bool fields to `CdoOptions` struct
-- [ ] Update `cdo_cli_parse` to recognize "install" and "uninstall" command tokens
-- [ ] Parse `--path`, `--global`, `--debug`, `--force`, `--list` flags for install
-- [ ] Add help text for install/uninstall commands in `cdo_cli_print_help`
-- [ ] Update `main.cpp` dispatch switch with `CDO_CMD_INSTALL` and `CDO_CMD_UNINSTALL` cases
-- [ ] Update `print_usage()` with install/uninstall command descriptions
+The core install/uninstall implementation (`cmd_install.c`, `cmd_install_manifest.c`, `bundle.c`) already exists. This plan focuses on wiring the handler function pointers, adding missing `crate.toml` parsing (version field, `[install]` section), fixing the `has_resources`/`has_shaders` detection logic, and adding comprehensive unit and e2e tests.
 
-## Task 2: Crate Version Field
+## Tasks
 
-- [ ] Add optional `version` field parsing in `crate.toml` under `[crate]`:
-  ```toml
-  [crate]
-  name = "my-app"
-  version = "0.1.0"
-  ```
-- [ ] Store as `char version[32]` in the `Crate` struct
-- [ ] Default to "0.0.0" when not present
-- [ ] Update workspace_load crate parsing to read this field
+- [x] 1. Wire handler function pointers and add Crate model fields
+  - [x] 1.1 Wire `cmd_install` and `cmd_uninstall` handlers in `registry_setup.c`
+    - Add `.handler = cmd_install` to `spec_install` and `.handler = cmd_uninstall` to `spec_uninstall` in `cdo_registry_create()`
+    - Add `#include "commands/cmd_install.h"` at the top of `registry_setup.c`
+    - _Requirements: REQ-INSTALL-1, REQ-INSTALL-8_
 
-## Task 3: Command Headers
+  - [x] 1.2 Add `version`, `resource_base`, and `shader_base` fields to the `Crate` struct
+    - In `crates/cdo/api/model/workspace.h`, add `char version[32]`, `char resource_base[64]`, and `char shader_base[64]` fields to `struct Crate`
+    - Default `version` to `"0.0.0"`, `resource_base` to `"."`, `shader_base` to `"."`
+    - _Requirements: REQ-INSTALL-12, REQ-INSTALL-2_
 
-- [ ] Create `crates/cdo/api/commands/cmd_install.h`
-- [ ] Declare `int cmd_install(const CdoOptions* opts)`
-- [ ] Declare `int cmd_uninstall(const CdoOptions* opts)`
+  - [x] 1.3 Parse `version` field and `[install]` section from `crate.toml`
+    - In `crates/cdo/lib/model/workspace_load.c` (`parse_crate_manifest`), after existing `[crate]` section parsing:
+      - Read `crate.version` string into `crate->version` (default `"0.0.0"`)
+      - Read `install.resource-base` string into `crate->resource_base` (default `"."`)
+      - Read `install.shader-base` string into `crate->shader_base` (default `"."`)
+    - _Requirements: REQ-INSTALL-12, REQ-INSTALL-2_
 
-## Task 4: Install Directory Resolution
+- [x] 2. Fix version usage and resource detection in `cmd_install.c`
+  - [x] 2.1 Replace hardcoded `"0.0.0"` version with `crate->version`
+    - In `cmd_install.c`, replace the `const char* version = "0.0.0";` TODO line with `const char* version = crate->version;`
+    - Also update the reinstall log message to use the actual old/new version from manifests
+    - _Requirements: REQ-INSTALL-12, REQ-INSTALL-6_
 
-- [ ] Implement `install_resolve_base_dir(const CdoOptions* opts, char* out, size_t out_size)`:
-  - `--path <dir>`: resolve relative to cwd, return that
-  - `--global`: return platform-specific global base
-  - Default: `~/.cdo/` via `pal_get_home_dir` + path join
-- [ ] Implement `install_apps_dir(const char* base, const char* name, char* out, size_t size)`:
-  returns `<base>/apps/<name>/`
-- [ ] Implement `install_bin_dir(const char* base, char* out, size_t size)`:
-  returns `<base>/bin/`
-- [ ] Implement `install_global_base()` returning platform-specific system path
+  - [x] 2.2 Fix `has_resources`/`has_shaders` detection logic
+    - The current code checks for `res/` and `shd/` subdirectories inside `app_dir`, but resources are flattened to app root (no `res/` or `shd/` folders exist after bundling)
+    - Replace the check: instead of looking for `res/` and `shd/` directories in the app bundle, use `crate->has_res` and `crate->has_shd` flags from the workspace model (which reflect whether the crate has `res/` and `shd/` modules)
+    - _Requirements: REQ-INSTALL-6, REQ-INSTALL-2_
 
-## Task 5: Extract Staging Logic from cmd_run
+  - [x] 2.3 Pass `BundleOpts` with `resource_base`/`shader_base` from crate config to `bundle_prepare`
+    - In `cmd_install.c`, construct a `BundleOpts` with `resource_base = crate->resource_base` and `shader_base = crate->shader_base` instead of passing `NULL`
+    - _Requirements: REQ-INSTALL-2_
 
-- [ ] Identify the staging folder logic in `cmd_run.c` that collects:
-  - exe binary
-  - transitive DLLs (from deps and workspace dyn/ modules)
-  - res/ directory contents
-  - shd/ directory contents
-- [ ] Extract into a shared function (e.g., `build_stage_runtime(...)` in a shared file)
-  - Input: workspace, crate, profile, build dir
-  - Output: path to populated staging directory
-- [ ] Ensure `cmd_run.c` calls the extracted function (no behavior change)
-- [ ] Make the function available for `cmd_install.c` to call
+  - [x] 2.4 Add `resource_base` and `shader_base` to manifest write/read
+    - In `cmd_install_internal.h`, add `char resource_base[64]` and `char shader_base[64]` to `InstallManifest`
+    - In `cmd_install_manifest.c`, write `resource_base` and `shader_base` fields in `install_write_manifest` under `[contents]`
+    - In `install_read_manifest`, parse `contents.resource_base` and `contents.shader_base`
+    - In `cmd_install.c`, populate `manifest.resource_base` and `manifest.shader_base` from crate config
+    - _Requirements: REQ-INSTALL-6_
 
-## Task 6: Core Install Logic
+- [x] 3. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] Create `crates/cdo/lib/commands/cmd_install.c`
-- [ ] Implement `cmd_install()`:
-  1. Handle `--list` early exit (delegate to `install_list`)
-  2. Load workspace
-  3. Determine target crate:
-     - If positional arg: find crate by name
-     - Else: scan for exe modules, error if 0 or >1
-  4. Validate: crate has exe/ module
-  5. Build in release mode (construct opts, call cmd_build)
-  6. Call shared staging logic to collect runtime artifacts
-  7. Resolve install base dir
-  8. Compute apps_dir and bin_dir
-  9. Check overwrite protection
-  10. If app dir exists: `pal_rmdir_r` (clean slate)
-  11. `pal_mkdir_p` apps_dir
-  12. Copy staging contents to apps_dir (recursive copy)
-  13. Strip binaries (unless --debug)
-  14. Write per-app manifest.toml
-  15. Update global install.toml
-  16. Generate launcher script
-  17. Log success
+- [x] 4. Unit tests for install command
+  - [x] 4.1 Create `test_install_manifest.c` — unit tests for manifest read/write and global index
+    - Create `crates/cdo/tst/unit/test_install_manifest.c`
+    - Test `install_write_manifest` writes correct TOML format
+    - Test `install_read_manifest` parses all fields correctly
+    - Test round-trip: write then read produces identical manifest
+    - Test `install_update_global_index` adds new entry
+    - Test `install_update_global_index` replaces existing entry (reinstall)
+    - Test `install_remove_from_global_index` removes entry
+    - Test `install_remove_from_global_index` with non-existent name is no-op
+    - Test `install_manifest_set_timestamp` produces valid ISO-8601 format
+    - _Requirements: REQ-INSTALL-6, REQ-INSTALL-7_
 
-## Task 7: Recursive Directory Copy
+  - [x] 4.2 Create `test_install_command.c` — unit tests for cmd_install/cmd_uninstall logic
+    - Create `crates/cdo/tst/unit/test_install_command.c`
+    - Test `cmd_install` with `--list` flag on empty index prints "No applications installed."
+    - Test `cmd_install` with `--list` flag parses and prints entries from a pre-written install.toml
+    - Test `cmd_uninstall` on a non-existent app returns 0 with info message
+    - Test `cmd_uninstall` removes app dir, launcher, and index entry
+    - Test overwrite protection: different workspace without `--force` returns error
+    - Test overwrite protection: same workspace proceeds silently
+    - Test overwrite protection: `--force` bypasses check
+    - _Requirements: REQ-INSTALL-1, REQ-INSTALL-8, REQ-INSTALL-9, REQ-INSTALL-10_
 
-- [ ] Implement `install_copy_dir(const char* src, const char* dest)`:
-  - Walk src with `pal_dir_walk`
-  - For each file: compute relative path, create parent dirs, `pal_file_copy`
-  - Preserve directory structure
-  - Return 0 on success, non-zero on any failure
-- [ ] This is needed because PAL currently has `pal_file_copy` (single file) but no recursive dir copy
+  - [x] 4.3 Create `test_install_paths.c` — unit tests for path resolution helpers
+    - Create `crates/cdo/tst/unit/test_install_paths.c`
+    - Expose `resolve_base_dir` and `resolve_bin_dir` as internal testable functions (move to a `cmd_install_internal.h` declaration or create a test-only wrapper)
+    - Test default base dir resolves to `~/.cdo/`
+    - Test `--path /custom/dir` resolves to the provided path
+    - Test `--global` resolves to platform-specific system dir
+    - Test `resolve_bin_dir` default returns `<base>/bin/`
+    - Test `resolve_bin_dir` with `--global` on Unix returns `/usr/local/bin/`
+    - _Requirements: REQ-INSTALL-3, REQ-INSTALL-4_
 
-## Task 8: Strip Binaries
+  - [x] 4.4 Create `test_crate_version.c` — unit tests for version and [install] section parsing
+    - Create `crates/cdo/tst/unit/test_crate_version.c`
+    - Test crate.toml with `version = "1.2.3"` under `[crate]` populates `crate->version`
+    - Test crate.toml without `version` defaults to `"0.0.0"`
+    - Test `[install]` section with `resource-base = "data"` and `shader-base = "shaders"` populates correctly
+    - Test missing `[install]` section defaults to `resource_base = "."` and `shader_base = "."`
+    - _Requirements: REQ-INSTALL-12, REQ-INSTALL-2_
 
-- [ ] Implement `install_strip_binaries(const char* app_dir, const CompilerInfo* info)`:
-  - Walk app_dir looking for .exe and .dll files
-  - For GCC/Clang: spawn `strip --strip-all <path>` on each
-  - For MSVC: no-op
-  - If strip not found: log debug, return success (non-fatal)
-- [ ] Strip operates on the app bundle copies, never build artifacts
+- [x] 5. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
 
-## Task 9: Per-App Manifest
+- [x] 6. End-to-end tests for install/uninstall
+  - [x] 6.1 Create e2e workspace `e2e/install_basic/` for install e2e tests
+    - Create `e2e/install_basic/` with a minimal workspace containing one executable crate (e.g., `hello`)
+    - Include a `crate.toml` with `version = "1.0.0"` and an `[install]` section
+    - Include a simple `exe/main.c` that compiles successfully
+    - _Requirements: REQ-INSTALL-1_
 
-- [ ] Create `crates/cdo/lib/commands/cmd_install_manifest.c`
-- [ ] Define `InstallManifest` struct:
-  ```c
-  typedef struct {
-      char name[64];
-      char version[32];
-      char crate_name[64];
-      char source_workspace[260];
-      char installed_at[32];      // ISO 8601
-      char cdo_version[32];
-      char executable[128];
-      char** dlls;
-      int  dll_count;
-      bool has_resources;
-      bool has_shaders;
-  } InstallManifest;
-  ```
-- [ ] Implement `install_manifest_write(const char* app_dir, const InstallManifest* m)`:
-  - Serialize to TOML, write to `<app_dir>/manifest.toml`
-- [ ] Implement `install_manifest_read(const char* app_dir, InstallManifest* m)`:
-  - Parse `<app_dir>/manifest.toml`, populate struct
-  - Return non-zero if file missing or malformed
-- [ ] Implement `install_manifest_free(InstallManifest* m)`: free dll array
+  - [x] 6.2 Create `test_e2e_install.c` — e2e tests for install and uninstall flow
+    - Create `crates/cdo/tst/unit/test_e2e_install.c` (using cdo_ut framework, marked TEST_SERIAL)
+    - Test full install flow: run `cdo install` in the e2e workspace, verify app dir created, manifest written, launcher exists, global index updated
+    - Test `cdo install --list` shows the installed app
+    - Test reinstall from same workspace succeeds without `--force`
+    - Test `cdo uninstall hello` removes app dir, launcher, and index entry
+    - Test `cdo install --path <tmpdir>` installs to custom directory
+    - Use a temporary install path (`--path`) to avoid polluting the real `~/.cdo/`
+    - _Requirements: REQ-INSTALL-1, REQ-INSTALL-3, REQ-INSTALL-8, REQ-INSTALL-9_
 
-## Task 10: Global Installation Index
+- [x] 7. Final checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] Define `InstallIndexEntry` struct (subset of manifest: name, version, source, date, path)
-- [ ] Implement `install_index_read(const char* apps_dir, InstallIndexEntry** entries, int* count)`:
-  - Parse `<apps_dir>/install.toml`
-  - Return empty list if file doesn't exist
-- [ ] Implement `install_index_write(const char* apps_dir, const InstallIndexEntry* entries, int count)`:
-  - Serialize array to TOML
-  - Write atomically (write to .tmp, then rename)
-- [ ] Implement `install_index_add(const char* apps_dir, const InstallIndexEntry* entry)`:
-  - Read existing, add/update entry by name, write back
-- [ ] Implement `install_index_remove(const char* apps_dir, const char* name)`:
-  - Read existing, remove entry by name, write back
-- [ ] Implement `install_index_rebuild(const char* apps_dir)`:
-  - Scan subdirectories for manifest.toml files
-  - Rebuild install.toml from discovered manifests
-  - Used when global index is corrupt/missing
+## Notes
 
-## Task 11: Overwrite Protection
+- The core implementation (`cmd_install.c`, `cmd_install_manifest.c`, `bundle.c`, `bundle.h`, `cmd_install.h`, `cmd_install_internal.h`) is already complete. This plan focuses on the remaining integration gaps and testing.
+- No PBT — using extensive unit tests per workspace steering rules.
+- E2e tests use `--path <tmpdir>` to avoid side effects on the developer's real `~/.cdo/` directory.
+- The `has_resources`/`has_shaders` fix is critical: the current code looks for `res/` and `shd/` directories in the app bundle, but since resources are flattened to the app root, those directories will never exist. The fix is to use `crate->has_res` / `crate->has_shd` from the workspace model instead.
+- Tasks marked with `*` are optional and can be skipped for faster MVP.
+- Each task references specific requirements for traceability.
+- Checkpoints ensure incremental validation.
 
-- [ ] Before installing, check if `<apps_dir>/<name>/manifest.toml` exists
-- [ ] If exists: read it, compare `source_workspace` with current workspace root
-- [ ] If different workspace and `--force` not set:
-  - Error: "App 'X' was installed from 'Y'. Use --force to overwrite."
-- [ ] If same workspace or --force: proceed (log "Reinstalling..." at info level)
-- [ ] If app dir exists but manifest is missing: treat as foreign, require --force
+## Task Dependency Graph
 
-## Task 12: Launcher Script Generation
-
-- [ ] Implement `install_write_launcher(const char* bin_dir, const char* app_name)`:
-  - On Windows: write `<bin_dir>/<name>.cmd` with content:
-    `@"%~dp0..\apps\<name>\<name>.exe" %*`
-  - On Unix: write `<bin_dir>/<name>` with content:
-    ```
-    #!/bin/sh
-    exec "$(dirname "$0")/../apps/<name>/<name>" "$@"
-    ```
-  - On Unix: set executable permission (chmod +x equivalent)
-- [ ] Handle the case where bin_dir doesn't exist: create it
-
-## Task 13: Uninstall Command
-
-- [ ] Implement `cmd_uninstall()`:
-  1. Get app name from positional arg (required, error if missing)
-  2. Resolve install base dir
-  3. Build app path: `<base>/apps/<name>/`
-  4. Check existence (`pal_path_exists`)
-  5. If not found: warn "App 'X' is not installed", return 0
-  6. Remove app directory: `pal_rmdir_r`
-  7. Remove launcher: delete `<base>/bin/<name>.cmd` (Windows) or `<base>/bin/<name>` (Unix)
-  8. Update global index: `install_index_remove`
-  9. Log: "Uninstalled 'X'"
-
-## Task 14: List Command
-
-- [ ] Implement `install_list()`:
-  1. Resolve install base dir
-  2. Read global index
-  3. If read fails: call `install_index_rebuild`, then re-read
-  4. If empty: print "No applications installed."
-  5. Else: print aligned table:
-     ```
-     Name          Version    Source                        Installed
-     my-app        0.1.0      C:/projects/my-app            2026-06-29
-     other-tool    2.0.0      C:/projects/tools             2026-06-28
-     ```
-
-## Task 15: Unit Tests
-
-- [ ] Test install base dir resolution (default, --path, --global)
-- [ ] Test per-app manifest write and read roundtrip
-- [ ] Test global index add/remove/rebuild
-- [ ] Test overwrite protection logic (same workspace, different workspace, missing manifest)
-- [ ] Test launcher script content generation (Windows and Unix variants)
-- [ ] Test crate version field parsing (present and absent)
-- [ ] Test auto-detect single exe crate (1 exe, 0 exe, multiple exe)
-- [ ] Test recursive directory copy
-- [ ] Test strip invocation (mock pal_spawn)
-- [ ] Target >90% line coverage on cmd_install.c and cmd_install_manifest.c
-
-## Task 16: Integration / E2E Tests
-
-- [ ] Create `e2e/install_basic/` workspace with a simple exe crate (no deps)
-  - Test: `cdo install` builds and installs to temp dir
-  - Test: launcher script exists and is correct
-  - Test: manifest.toml is written with correct fields
-  - Test: global index contains the entry
-- [ ] Create `e2e/install_with_deps/` workspace with exe + dyn + res
-  - Test: DLLs are included in app bundle
-  - Test: res/ directory is included
-  - Test: exe runs successfully from installed location
-- [ ] Test `cdo install --list` shows installed apps
-- [ ] Test `cdo uninstall <name>` removes everything (app dir + launcher + index entry)
-- [ ] Test reinstall from same workspace succeeds without --force
-- [ ] Test install from different workspace requires --force
-- [ ] Test installing non-exe crate fails with clear error
+```json
+{
+  "waves": [
+    { "id": 0, "tasks": ["1.1", "1.2"] },
+    { "id": 1, "tasks": ["1.3"] },
+    { "id": 2, "tasks": ["2.1", "2.2", "2.3", "2.4"] },
+    { "id": 3, "tasks": ["4.1", "4.3", "4.4"] },
+    { "id": 4, "tasks": ["4.2", "6.1"] },
+    { "id": 5, "tasks": ["6.2"] }
+  ]
+}
+```

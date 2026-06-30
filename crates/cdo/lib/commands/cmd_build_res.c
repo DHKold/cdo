@@ -1,6 +1,6 @@
 #include "cmd_build_internal.h"
 
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -95,7 +95,7 @@ static const char* relative_to(const char* base, const char* full) {
 /// Requirements: 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9
 int build_resource_module(const Workspace* ws, Crate* crate,
                           const char* profile,
-                          ProgressBar* progress,
+                          CliProgressBar* progress,
                           int* completed_units) {
     if (!crate->has_res) return 0;
 
@@ -108,7 +108,7 @@ int build_resource_module(const Workspace* ws, Crate* crate,
 
     char dest_dir[260];
     if (pal_path_join(dest_dir, sizeof(dest_dir), build_dir, "res") != 0) {
-        cdo_error("res module: failed to compute destination path for crate '%s'", crate->name);
+        cdo_log_error("res module: failed to compute destination path for crate '%s'", crate->name);
         return 1;
     }
 
@@ -122,29 +122,29 @@ int build_resource_module(const Workspace* ws, Crate* crate,
     PathList src_files = {0};
     WalkCtx src_ctx = { .list = &src_files, .error = 0 };
 
-    // Req 1.7: Empty res/ is fine — return 0
+    // Req 1.7: Empty res/ is fine â€” return 0
     if (pal_path_exists(norm_src) != 0) {
-        cdo_debug("res module '%s': source dir does not exist, nothing to do", crate->name);
+        cdo_log_debug("res module '%s': source dir does not exist, nothing to do", crate->name);
         if (progress && completed_units) {
             *completed_units += 1;
-            progress_update(progress, *completed_units);
+            cli_out_progress_update(progress, *completed_units);
         }
         return 0;
     }
 
     int rc = pal_dir_walk(norm_src, collect_files_cb, &src_ctx);
     if (rc != 0 || src_ctx.error) {
-        cdo_error("res module: failed to walk source directory '%s' for crate '%s'", norm_src, crate->name);
+        cdo_log_error("res module: failed to walk source directory '%s' for crate '%s'", norm_src, crate->name);
         pathlist_free(&src_files);
         return 1;
     }
 
     // Req 1.7: If res/ has zero files, report and return success
     if (src_files.count == 0) {
-        cdo_debug("res module '%s': 0 copied, 0 skipped (empty)", crate->name);
+        cdo_log_debug("res module '%s': 0 copied, 0 skipped (empty)", crate->name);
         if (progress && completed_units) {
             *completed_units += 1;
-            progress_update(progress, *completed_units);
+            cli_out_progress_update(progress, *completed_units);
         }
         pathlist_free(&src_files);
         return 0;
@@ -152,7 +152,7 @@ int build_resource_module(const Workspace* ws, Crate* crate,
 
     // --- Ensure destination directory exists ---
     if (pal_mkdir_p(dest_dir) != 0) {
-        cdo_error("res module: failed to create destination directory '%s' for crate '%s'", dest_dir, crate->name);
+        cdo_log_error("res module: failed to create destination directory '%s' for crate '%s'", dest_dir, crate->name);
         pathlist_free(&src_files);
         return 1;
     }
@@ -165,7 +165,7 @@ int build_resource_module(const Workspace* ws, Crate* crate,
         const char* src_path = src_files.paths[i];
         const char* rel = relative_to(norm_src, src_path);
         if (!rel || *rel == '\0') {
-            cdo_error("res module: failed to compute relative path for '%s'", src_path);
+            cdo_log_error("res module: failed to compute relative path for '%s'", src_path);
             pathlist_free(&src_files);
             return 1;
         }
@@ -173,12 +173,12 @@ int build_resource_module(const Workspace* ws, Crate* crate,
         // Compute destination path
         char dst_path[260];
         if (pal_path_join(dst_path, sizeof(dst_path), dest_dir, rel) != 0) {
-            cdo_error("res module: destination path too long for '%s'", rel);
+            cdo_log_error("res module: destination path too long for '%s'", rel);
             pathlist_free(&src_files);
             return 1;
         }
 
-        // Req 1.5: Incremental — skip if dest mtime >= source mtime
+        // Req 1.5: Incremental â€” skip if dest mtime >= source mtime
         uint64_t src_mtime = 0, dst_mtime = 0;
         bool needs_copy = true;
 
@@ -203,7 +203,7 @@ int build_resource_module(const Workspace* ws, Crate* crate,
         if (last_slash) {
             *last_slash = '\0';
             if (pal_mkdir_p(parent_dir) != 0) {
-                cdo_error("res module: failed to create directory '%s' for crate '%s'", parent_dir, crate->name);
+                cdo_log_error("res module: failed to create directory '%s' for crate '%s'", parent_dir, crate->name);
                 pathlist_free(&src_files);
                 return 1;
             }
@@ -211,7 +211,7 @@ int build_resource_module(const Workspace* ws, Crate* crate,
 
         // Req 1.8: Copy with error reporting
         if (pal_file_copy(src_path, dst_path) != 0) {
-            cdo_error("res module: failed to copy '%s' -> '%s' for crate '%s'", src_path, dst_path, crate->name);
+            cdo_log_error("res module: failed to copy '%s' -> '%s' for crate '%s'", src_path, dst_path, crate->name);
             pathlist_free(&src_files);
             return 1;
         }
@@ -232,7 +232,7 @@ int build_resource_module(const Workspace* ws, Crate* crate,
     if (pal_path_exists(norm_dest) == 0) {
         rc = pal_dir_walk(norm_dest, collect_files_cb, &dest_ctx);
         if (rc != 0 || dest_ctx.error) {
-            cdo_error("res module: failed to walk destination directory '%s' for stale removal", norm_dest);
+            cdo_log_error("res module: failed to walk destination directory '%s' for stale removal", norm_dest);
             pathlist_free(&src_files);
             pathlist_free(&dest_files);
             return 1;
@@ -250,18 +250,18 @@ int build_resource_module(const Workspace* ws, Crate* crate,
             if (pal_path_exists(check_src) != 0) {
                 // Stale: source no longer exists, remove destination
                 remove(dest_path);
-                cdo_debug("res module '%s': removed stale file '%s'", crate->name, rel);
+                cdo_log_debug("res module '%s': removed stale file '%s'", crate->name, rel);
             }
         }
     }
 
     // Req 1.6: Log counts at debug level
-    cdo_debug("res module '%s': %d copied, %d skipped", crate->name, copied, skipped);
+    cdo_log_debug("res module '%s': %d copied, %d skipped", crate->name, copied, skipped);
 
     // Update progress
     if (progress && completed_units) {
         *completed_units += 1;
-        progress_update(progress, *completed_units);
+        cli_out_progress_update(progress, *completed_units);
     }
 
     pathlist_free(&src_files);

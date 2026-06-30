@@ -2,7 +2,7 @@
 #include "core/compiler.h"
 #include "model/scanner.h"
 #include "model/module.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -40,7 +40,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
                          const CacheConfig* cache_config,
                          CacheStats* cache_stats,
                          bool no_cache,
-                         ProgressBar* progress,
+                         CliProgressBar* progress,
                          int* completed_units) {
     if (!crate->has_lib) return 0; // Nothing to do
 
@@ -50,7 +50,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
     FileList sources = {0};
     int rc = scanner_scan_module_sources(lib_mod->dir_path, MODULE_LIB, NULL, 0, &sources);
     if (rc != 0) {
-        cdo_error("failed to scan lib/ sources for crate '%s'", crate->name);
+        cdo_log_error("failed to scan lib/ sources for crate '%s'", crate->name);
         return 1;
     }
 
@@ -66,7 +66,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
 
     // Req 2.5: If lib/ has no compilable source files, report error and halt
     if (compilable_count == 0) {
-        cdo_error("crate '%s': lib/ module has no compilable source files (.c or .cpp)",
+        cdo_log_error("crate '%s': lib/ module has no compilable source files (.c or .cpp)",
                   crate->name);
         filelist_free(&sources);
         return 1;
@@ -83,7 +83,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
                                                 lib_artifact_path, sizeof(lib_artifact_path),
                                                 lib_obj_dir, sizeof(lib_obj_dir));
     if (apath_rc != 0) {
-        cdo_error("failed to compute artifact path for lib/ module in crate '%s'",
+        cdo_log_error("failed to compute artifact path for lib/ module in crate '%s'",
                   crate->name);
         filelist_free(&sources);
         return 1;
@@ -94,7 +94,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
     int inc_count = 0;
     rc = module_include_paths(crate, MODULE_LIB, ws, &inc_paths, &inc_count);
     if (rc != 0) {
-        cdo_error("failed to compute include paths for lib/ module in crate '%s'",
+        cdo_log_error("failed to compute include paths for lib/ module in crate '%s'",
                   crate->name);
         filelist_free(&sources);
         return 1;
@@ -160,8 +160,8 @@ int build_library_module(const Workspace* ws, Crate* crate,
         }
 
         // Detect coverage instrumentation mismatch:
-        // - If coverage is requested but .gcno is missing → need to rebuild with instrumentation.
-        // - If coverage is NOT requested but .gcno exists → need to rebuild without instrumentation.
+        // - If coverage is requested but .gcno is missing â†’ need to rebuild with instrumentation.
+        // - If coverage is NOT requested but .gcno exists â†’ need to rebuild without instrumentation.
         if (!needs_rebuild) {
             char gcno_path[260];
             size_t obj_len = strlen(obj_path);
@@ -185,7 +185,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
 
     // --- Compile dirty sources ---
     if (dirty_count > 0) {
-        cdo_info("Compiling lib/ module for crate '%s' (%d files)", crate->name, dirty_count);
+        cdo_log_info("Compiling lib/ module for crate '%s' (%d files)", crate->name, dirty_count);
 
         // Merge crate-level defines with profile defines
         int merged_define_count = build_prof->define_count + crate->define_count;
@@ -208,7 +208,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
         CompileJob* compile_jobs = (CompileJob*)calloc(dirty_count, sizeof(CompileJob));
         char** obj_paths = (char**)calloc(dirty_count, sizeof(char*));
         if (!compile_jobs || !obj_paths) {
-            cdo_error("out of memory allocating compile jobs for lib/ module");
+            cdo_log_error("out of memory allocating compile jobs for lib/ module");
             free(compile_jobs);
             free(obj_paths);
             free(merged_defines);
@@ -227,7 +227,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
 
             obj_paths[d] = (char*)malloc(260);
             if (!obj_paths[d]) {
-                cdo_error("out of memory");
+                cdo_log_error("out of memory");
                 for (int x = 0; x < d; x++) free(obj_paths[x]);
                 free(obj_paths);
                 free(compile_jobs);
@@ -290,7 +290,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
         free(merged_defines);
 
         if (rc != 0) {
-            cdo_error("compilation failed for lib/ module in crate '%s'", crate->name);
+            cdo_log_error("compilation failed for lib/ module in crate '%s'", crate->name);
             free(dirty_indices);
             free(compilable_indices);
             free(all_includes);
@@ -300,13 +300,13 @@ int build_library_module(const Workspace* ws, Crate* crate,
             return 1;
         }
     } else {
-        cdo_info("crate '%s' lib/ module is up to date", crate->name);
+        cdo_log_info("crate '%s' lib/ module is up to date", crate->name);
     }
 
     // Update progress
     if (progress && completed_units) {
         *completed_units += compilable_count;
-        progress_update(progress, *completed_units);
+        cli_out_progress_update(progress, *completed_units);
     }
 
     // --- Archive object files into static library ---
@@ -314,7 +314,7 @@ int build_library_module(const Workspace* ws, Crate* crate,
     const char** archive_obj_paths = (const char**)malloc(compilable_count * sizeof(const char*));
     char** archive_obj_bufs = (char**)calloc(compilable_count, sizeof(char*));
     if (!archive_obj_paths || !archive_obj_bufs) {
-        cdo_error("out of memory for archive step");
+        cdo_log_error("out of memory for archive step");
         free(archive_obj_paths);
         free(archive_obj_bufs);
         free(dirty_indices);
@@ -362,11 +362,11 @@ int build_library_module(const Workspace* ws, Crate* crate,
     link_job.link_lib_count = 0;
     link_job.shared = false;
 
-    cdo_info("Archiving lib/ module: %s", artifact_path);
+    cdo_log_info("Archiving lib/ module: %s", artifact_path);
     rc = compiler_link(&link_job, compiler);
 
     if (rc != 0) {
-        cdo_error("archiving failed for lib/ module in crate '%s'", crate->name);
+        cdo_log_error("archiving failed for lib/ module in crate '%s'", crate->name);
         for (int i = 0; i < compilable_count; i++) free(archive_obj_bufs[i]);
         free(archive_obj_bufs);
         free(archive_obj_paths);

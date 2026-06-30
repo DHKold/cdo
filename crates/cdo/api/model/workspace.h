@@ -35,6 +35,7 @@ typedef struct Crate {
     bool            has_api;        // shortcut: modules[MODULE_API].present
     bool            has_res;        // shortcut: modules[MODULE_RES].present
     bool            has_shd;        // shortcut: modules[MODULE_SHD].present
+    bool            has_e2e;        // shortcut: modules[MODULE_E2E].present
 
     // Dependencies (unchanged)
     int             dep_count;
@@ -45,6 +46,11 @@ typedef struct Crate {
     int             link_lib_count;
     char**          defines;        // crate-level defines from [build].defines
     int             define_count;
+
+    // Install configuration
+    char            version[32];        // from [crate].version, default "0.0.0"
+    char            resource_base[64];  // from [install].resource-base, default "."
+    char            shader_base[64];    // from [install].shader-base, default "."
 
     // Lifecycle hooks
     HookSet         hooks;          // crate-level lifecycle hooks (parsed from [hooks])

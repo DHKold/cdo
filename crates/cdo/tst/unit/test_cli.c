@@ -1,98 +1,71 @@
-// crates/cdo_pbt/src/unit/test_cli.c
-// Unit tests for CLI argument parsing and command suggestion
+// crates/cdo/tst/unit/test_cli.c
+// Unit tests for CLI argument parsing via the new cdo_cli framework.
+// The old cdo_cli_parse() / CdoOptions tests have been removed (task 5.5).
+// Parsing correctness is now validated by test_parse_integration.c.
 #include "cdo_ut.h"
-#include "core/cli.h"
+#include "cmd/cli_cmd.h"
+#include "core/registry_setup.h"
 
-// --- cdo_cli_parse ---
+// --- Registry-based parsing ---
 
-TEST(cli_parse_build) {
-    char* argv[] = {"cdo", "build"};
-    CdoOptions opts = {0};
-    int rc = cdo_cli_parse(2, argv, &opts);
+TEST(cli_parse_build_via_registry) {
+    CliCmdRegistry* reg = cdo_registry_create();
+    TEST_ASSERT(reg != NULL);
+
+    const char* argv[] = {"cdo", "build"};
+    CliArgValue arg_buf[32];
+    CliParseResult result = {0};
+    int rc = cli_cmd_parse(reg, 2, argv, arg_buf, 32, &result);
     TEST_ASSERT_EQ(rc, 0);
-    TEST_ASSERT_EQ(opts.command, CDO_CMD_BUILD);
+    TEST_ASSERT(result.matched_cmd != NULL);
+    TEST_ASSERT_STR_EQ(result.matched_cmd->name, "build");
+
+    cli_cmd_registry_destroy(reg);
     return 0;
 }
 
-TEST(cli_parse_build_release) {
-    char* argv[] = {"cdo", "build", "--release"};
-    CdoOptions opts = {0};
-    int rc = cdo_cli_parse(3, argv, &opts);
-    TEST_ASSERT_EQ(rc, 0);
-    TEST_ASSERT(opts.release == true);
+TEST(cli_parse_unknown_command_error) {
+    CliCmdRegistry* reg = cdo_registry_create();
+    TEST_ASSERT(reg != NULL);
+
+    const char* argv[] = {"cdo", "bluild"};
+    CliArgValue arg_buf[32];
+    CliParseResult result = {0};
+    int rc = cli_cmd_parse(reg, 2, argv, arg_buf, 32, &result);
+    TEST_ASSERT(rc != 0);
+
+    // Verify suggestions are available
+    char suggestions[4][32];
+    int n = cli_cmd_suggest(reg, "bluild", suggestions, 4);
+    TEST_ASSERT(n > 0);
+    TEST_ASSERT_STR_EQ(suggestions[0], "build");
+
+    cli_cmd_registry_destroy(reg);
     return 0;
 }
 
-TEST(cli_parse_verbose_test) {
-    char* argv[] = {"cdo", "--verbose", "test"};
-    CdoOptions opts = {0};
-    int rc = cdo_cli_parse(3, argv, &opts);
+TEST(cli_parse_verbose_flag) {
+    CliCmdRegistry* reg = cdo_registry_create();
+    TEST_ASSERT(reg != NULL);
+
+    const char* argv[] = {"cdo", "test", "--verbose"};
+    CliArgValue arg_buf[32];
+    CliParseResult result = {0};
+    int rc = cli_cmd_parse(reg, 3, argv, arg_buf, 32, &result);
     TEST_ASSERT_EQ(rc, 0);
-    TEST_ASSERT(opts.verbose == true);
-    TEST_ASSERT_EQ(opts.command, CDO_CMD_TEST);
-    return 0;
-}
+    TEST_ASSERT(result.matched_cmd != NULL);
+    TEST_ASSERT_STR_EQ(result.matched_cmd->name, "test");
 
-TEST(cli_parse_double_dash) {
-    char* argv[] = {"cdo", "build", "--", "extra"};
-    CdoOptions opts = {0};
-    int rc = cdo_cli_parse(4, argv, &opts);
-    TEST_ASSERT_EQ(rc, 0);
-    TEST_ASSERT_EQ(opts.argc_rest, 1);
-    TEST_ASSERT_STR_EQ(opts.argv_rest[0], "extra");
-    return 0;
-}
-
-TEST(cli_parse_coverage) {
-    char* argv[] = {"cdo", "build", "--coverage"};
-    CdoOptions opts = {0};
-    int rc = cdo_cli_parse(3, argv, &opts);
-    TEST_ASSERT_EQ(rc, 0);
-    TEST_ASSERT(opts.coverage == true);
-    return 0;
-}
-
-TEST(cli_parse_cache_flag) {
-    char* argv[] = {"cdo", "clean", "--cache"};
-    CdoOptions opts = {0};
-    int rc = cdo_cli_parse(3, argv, &opts);
-    TEST_ASSERT_EQ(rc, 0);
-    TEST_ASSERT_EQ(opts.command, CDO_CMD_CLEAN);
-    TEST_ASSERT(opts.cache == true);
-    return 0;
-}
-
-TEST(cli_parse_clean_without_cache_flag) {
-    char* argv[] = {"cdo", "clean"};
-    CdoOptions opts = {0};
-    int rc = cdo_cli_parse(2, argv, &opts);
-    TEST_ASSERT_EQ(rc, 0);
-    TEST_ASSERT_EQ(opts.command, CDO_CMD_CLEAN);
-    TEST_ASSERT(opts.cache == false);
-    return 0;
-}
-
-// --- cdo_cli_suggest ---
-
-TEST(cli_suggest_typo) {
-    char suggestions[8][32] = {0};
-    int count = cdo_cli_suggest("buidl", suggestions, 8);
-    TEST_ASSERT(count >= 1);
-    // At least one suggestion should contain "build"
-    int found_build = 0;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(suggestions[i], "build") == 0) {
-            found_build = 1;
+    // Check verbose flag is set
+    bool verbose = false;
+    for (int i = 0; i < result.arg_value_count; i++) {
+        if (result.arg_values[i].name && strcmp(result.arg_values[i].name, "verbose") == 0) {
+            verbose = result.arg_values[i].value.bool_val;
             break;
         }
     }
-    TEST_ASSERT(found_build);
-    return 0;
-}
+    TEST_ASSERT(verbose == true);
 
-TEST(cli_suggest_no_match) {
-    char suggestions[8][32] = {0};
-    int count = cdo_cli_suggest("zzzzzzxqwvbnm", suggestions, 8);
-    TEST_ASSERT_EQ(count, 0);
+    cli_cmd_registry_destroy(reg);
     return 0;
 }

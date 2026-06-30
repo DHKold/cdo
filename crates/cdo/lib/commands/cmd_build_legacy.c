@@ -1,7 +1,7 @@
 #include "cmd_build_internal.h"
 #include "core/compiler.h"
 #include "model/scanner.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -24,7 +24,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
     const CacheConfig* cache_config = ctx->cache_config;
     CacheStats* cache_stats = ctx->cache_stats;
     bool no_cache = ctx->no_cache;
-    ProgressBar* progress = ctx->progress;
+    CliProgressBar* progress = ctx->progress;
     int* completed_units = ctx->completed_units;
     const char* crate_full_path = ctx->crate_full_path;
     const char* build_dir = ctx->build_dir;
@@ -42,12 +42,12 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
     FileList sources = {0};
     rc = scanner_scan_sources(crate_full_path, NULL, 0, &sources);
     if (rc != 0) {
-        cdo_error("failed to scan sources for crate '%s'", crate->name);
+        cdo_log_error("failed to scan sources for crate '%s'", crate->name);
         return 1;
     }
 
     if (sources.count == 0) {
-        cdo_warn("crate '%s' has no source files", crate->name);
+        cdo_log_warn("crate '%s' has no source files", crate->name);
         filelist_free(&sources);
         return -1; // skip
     }
@@ -68,7 +68,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
     }
 
     if (compilable_src_count == 0) {
-        cdo_warn("crate '%s' has no compilable source files", crate->name);
+        cdo_log_warn("crate '%s' has no compilable source files", crate->name);
         free(compilable_indices);
         filelist_free(&sources);
         return -1; // skip
@@ -97,8 +97,8 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
             }
         }
         // Detect coverage instrumentation mismatch:
-        // - If coverage is requested but .gcno is missing → need to rebuild with instrumentation.
-        // - If coverage is NOT requested but .gcno exists → need to rebuild without instrumentation.
+        // - If coverage is requested but .gcno is missing â†’ need to rebuild with instrumentation.
+        // - If coverage is NOT requested but .gcno exists â†’ need to rebuild without instrumentation.
         if (!needs_rebuild) {
             char gcno_path[260];
             size_t obj_len = strlen(obj_path);
@@ -121,16 +121,16 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
     free(compilable_indices);
 
     if (dirty_count == 0) {
-        cdo_info("crate '%s' is up to date", crate->name);
+        cdo_log_info("crate '%s' is up to date", crate->name);
         *completed_units += compilable_src_count;
-        progress_update(progress, *completed_units);
+        cli_out_progress_update(progress, *completed_units);
         filelist_free(&sources);
         free(dirty_indices);
         return 0;
     }
 
-    cdo_info("Compiling crate '%s' (%d files)", crate->name, dirty_count);
-    cdo_debug("  %s: %d/%d files need rebuild", crate->name, dirty_count, sources.count);
+    cdo_log_info("Compiling crate '%s' (%d files)", crate->name, dirty_count);
+    cdo_log_debug("  %s: %d/%d files need rebuild", crate->name, dirty_count, sources.count);
 
     // Include paths: crate's own src/ and include/ directories, plus deps
     char crate_src[260];
@@ -151,7 +151,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
     CompileJob* compile_jobs = (CompileJob*)calloc(dirty_count, sizeof(CompileJob));
     char** obj_paths = (char**)calloc(dirty_count, sizeof(char*));
     if (!compile_jobs || !obj_paths) {
-        cdo_error("out of memory allocating compile jobs");
+        cdo_log_error("out of memory allocating compile jobs");
         filelist_free(&sources);
         free(dirty_indices);
         free(compile_jobs);
@@ -179,7 +179,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
         int src_idx = dirty_indices[d];
         const char* src_path = sources.paths[src_idx];
         obj_paths[d] = (char*)malloc(260);
-        if (!obj_paths[d]) { cdo_error("out of memory"); failed = 1; break; }
+        if (!obj_paths[d]) { cdo_log_error("out of memory"); failed = 1; break; }
         object_path_from_source(src_path, build_dir, obj_paths[d], 260);
         compile_jobs[d].source_path = src_path;
         compile_jobs[d].object_path = obj_paths[d];
@@ -220,7 +220,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
 
     rc = compiler_compile_batch(compile_jobs, dirty_count, compiler, jobs, cache_config, cache_stats, no_cache);
     if (rc != 0) {
-        cdo_error("compilation failed for crate '%s'", crate->name);
+        cdo_log_error("compilation failed for crate '%s'", crate->name);
         for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
         free(obj_paths); free(compile_jobs); free(merged_defines);
         filelist_free(&sources); free(dirty_indices);
@@ -228,7 +228,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
     }
 
     *completed_units += compilable_src_count;
-    progress_update(progress, *completed_units);
+    cli_out_progress_update(progress, *completed_units);
 
     // Link - collect ALL object files (not just dirty)
     int compilable_count = 0;
@@ -240,7 +240,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
 
     char** all_obj_paths = (char**)calloc(compilable_count, sizeof(char*));
     if (!all_obj_paths) {
-        cdo_error("out of memory");
+        cdo_log_error("out of memory");
         for (int d = 0; d < dirty_count; d++) free(obj_paths[d]);
         free(obj_paths); free(compile_jobs); free(merged_defines);
         filelist_free(&sources); free(dirty_indices);
@@ -253,7 +253,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
         bool compilable = is_cpp_source(sources.paths[s]) || (ext && strcmp(ext, ".c") == 0);
         if (!compilable) continue;
         all_obj_paths[obj_idx] = (char*)malloc(260);
-        if (!all_obj_paths[obj_idx]) { cdo_error("out of memory"); failed = 1; break; }
+        if (!all_obj_paths[obj_idx]) { cdo_log_error("out of memory"); failed = 1; break; }
         object_path_from_source(sources.paths[s], build_dir, all_obj_paths[obj_idx], 260);
         obj_idx++;
     }
@@ -321,10 +321,10 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
                         dep_jobs[dj].c_standard = c_standard_str(dep_crate->c_standard);
                     dj++;
                 }
-                cdo_info("Compiling dep '%s' for test (%d files)", dep_crate->name, dj);
+                cdo_log_info("Compiling dep '%s' for test (%d files)", dep_crate->name, dj);
                 int dep_rc = compiler_compile_batch(dep_jobs, dj, compiler, jobs, cache_config, cache_stats, no_cache);
                 if (dep_rc != 0) {
-                    cdo_error("failed to compile dep '%s' for test crate", dep_crate->name);
+                    cdo_log_error("failed to compile dep '%s' for test crate", dep_crate->name);
                     for (int x = 0; x < dj; x++) free(dep_obj_bufs[x]);
                     free(dep_obj_bufs); free(dep_jobs);
                     filelist_free(&dep_sources);
@@ -359,7 +359,7 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
         int total_link_objs = compilable_count + dep_obj_count;
         const char** merged_obj_paths = (const char**)malloc(total_link_objs * sizeof(const char*));
         if (!merged_obj_paths) {
-            cdo_error("out of memory");
+            cdo_log_error("out of memory");
             for (int oi = 0; oi < dep_obj_count; oi++) free(dep_obj_paths_arr[oi]);
             free(dep_obj_paths_arr);
             failed = 1;
@@ -417,14 +417,14 @@ int build_legacy_crate(const LegacyBuildCtx* ctx) {
                 }
             }
 
-            cdo_info("Linking %s", output_path);
+            cdo_log_info("Linking %s", output_path);
             rc = compiler_link(&link_job, &link_compiler);
-            if (rc != 0) { cdo_error("linking failed for crate '%s'", crate->name); failed = 1; }
+            if (rc != 0) { cdo_log_error("linking failed for crate '%s'", crate->name); failed = 1; }
 
             if (!failed && crate->type == CRATE_EXECUTABLE) {
                 int deployed = deploy_catalog_files(ws->root_path, build_dir);
                 if (deployed > 0)
-                    cdo_debug("deployed %d catalog file(s) to %s/catalogs/", deployed, build_dir);
+                    cdo_log_debug("deployed %d catalog file(s) to %s/catalogs/", deployed, build_dir);
             }
         }
 

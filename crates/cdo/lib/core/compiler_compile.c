@@ -3,7 +3,7 @@
 #include "core/cache.h"
 #include "commons/threadpool.h"
 #include "pal/pal.h"
-#include "core/output.h"
+#include "core/log.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +11,7 @@
 #include <ctype.h>
 
 // ---------------------------------------------------------------------------
-// compiler_compile_batch — generate commands and execute via thread pool
+// compiler_compile_batch â€” generate commands and execute via thread pool
 // ---------------------------------------------------------------------------
 
 // Maximum number of arguments we'll pass to the compiler
@@ -57,7 +57,7 @@ static int build_gcc_clang_args(const CompileJob* job, const CompilerInfo* info,
     // Include paths: -I<path>
     for (int i = 0; i < job->include_path_count; i++) {
         if (n >= max_args) return -1;
-        // We'll build a string "-I<path>" — use a static buffer pattern.
+        // We'll build a string "-I<path>" â€” use a static buffer pattern.
         // Since pal_spawn copies the args, we need persistent memory.
         // We'll use a simple approach: store the -I prefix inline.
         args[n++] = "-I";
@@ -278,7 +278,7 @@ static void compile_task(void* arg) {
     }
 
     if (arg_count < 0) {
-        cdo_error("Too many compiler arguments for: %s", job->source_path);
+        cdo_log_error("Too many compiler arguments for: %s", job->source_path);
         ctx->result = -1;
         return;
     }
@@ -332,7 +332,7 @@ static void compile_task(void* arg) {
     if (ctx->cache_backend != NULL) {
         // Shift all existing args right by 1, inserting the original compiler as first arg
         if (arg_count + 1 > MAX_COMPILE_ARGS) {
-            cdo_error("Too many compiler arguments (with cache backend prefix) for: %s", job->source_path);
+            cdo_log_error("Too many compiler arguments (with cache backend prefix) for: %s", job->source_path);
             ctx->result = -1;
             return;
         }
@@ -358,11 +358,11 @@ static void compile_task(void* arg) {
     PalSpawnResult result;
     memset(&result, 0, sizeof(result));
 
-    cdo_trace("Compiling: %s", job->source_path);
+    cdo_log_trace("Compiling: %s", job->source_path);
 
     int rc = pal_spawn(&opts, &result);
     if (rc != PAL_OK) {
-        cdo_error("Failed to spawn compiler for: %s", job->source_path);
+        cdo_log_error("Failed to spawn compiler for: %s", job->source_path);
         ctx->result = -1;
         pal_spawn_result_free(&result);
         return;
@@ -371,17 +371,17 @@ static void compile_task(void* arg) {
     if (result.exit_code != 0) {
         // Print compiler error output
         if (result.stderr_buf && result.stderr_buf[0] != '\0') {
-            cdo_error("%s", result.stderr_buf);
+            cdo_log_error("%s", result.stderr_buf);
         }
         if (result.stdout_buf && result.stdout_buf[0] != '\0') {
-            cdo_error("%s", result.stdout_buf);
+            cdo_log_error("%s", result.stdout_buf);
         }
-        cdo_error("Compilation failed: %s (exit code %d)",
+        cdo_log_error("Compilation failed: %s (exit code %d)",
                   job->source_path, result.exit_code);
         ctx->result = result.exit_code;
     } else {
         ctx->result = 0;
-        cdo_trace("Compiled: %s -> %s", job->source_path, job->object_path);
+        cdo_log_trace("Compiled: %s -> %s", job->source_path, job->object_path);
 
         // For MSVC: parse /showIncludes output and write a .d dep file
         if (info->family == COMPILER_MSVC && result.stdout_buf) {
@@ -398,7 +398,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
                            bool no_cache) {
     if (!jobs || job_count <= 0 || !info) return -1;
     if (info->family == COMPILER_UNKNOWN) {
-        cdo_error("Cannot compile: no compiler detected");
+        cdo_log_error("Cannot compile: no compiler detected");
         return -1;
     }
 
@@ -424,7 +424,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         cache_keys = (char (*)[CACHE_KEY_HEX_LEN + 1])calloc((size_t)job_count, CACHE_KEY_HEX_LEN + 1);
         key_valid = (bool*)calloc((size_t)job_count, sizeof(bool));
         if (!miss_indices || !cache_keys || !key_valid) {
-            cdo_error("Failed to allocate cache lookup indices");
+            cdo_log_error("Failed to allocate cache lookup indices");
             free(miss_indices);
             free(cache_keys);
             free(key_valid);
@@ -481,24 +481,24 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
                 miss_indices[miss_count++] = i;
                 key_valid[slot] = false;
                 cache_stats->misses++;
-                cdo_trace("Cache key computation failed for: %s (treating as miss)", job->source_path);
+                cdo_log_trace("Cache key computation failed for: %s (treating as miss)", job->source_path);
                 continue;
             }
 
             // Try cache lookup
             int lookup_rc = cache_lookup(cache_config, cache_key, job->object_path);
             if (lookup_rc == 0) {
-                // Cache hit — object was copied to dest
+                // Cache hit â€” object was copied to dest
                 cache_stats->hits++;
-                cdo_trace("Cache hit: %s", job->source_path);
+                cdo_log_trace("Cache hit: %s", job->source_path);
             } else {
-                // Cache miss — needs compilation; store key for post-compile store
+                // Cache miss â€” needs compilation; store key for post-compile store
                 int slot = miss_count;
                 miss_indices[miss_count++] = i;
                 memcpy(cache_keys[slot], cache_key, CACHE_KEY_HEX_LEN + 1);
                 key_valid[slot] = true;
                 cache_stats->misses++;
-                cdo_trace("Cache miss: %s", job->source_path);
+                cdo_log_trace("Cache miss: %s", job->source_path);
             }
         }
 
@@ -507,11 +507,11 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
             free(miss_indices);
             free(cache_keys);
             free(key_valid);
-            cdo_info("All %d file(s) served from cache", job_count);
+            cdo_log_info("All %d file(s) served from cache", job_count);
             return 0;
         }
 
-        cdo_debug("Cache: %d hit(s), %d miss(es) — compiling misses", cache_stats->hits, miss_count);
+        cdo_log_debug("Cache: %d hit(s), %d miss(es) â€” compiling misses", cache_stats->hits, miss_count);
     }
 
     // Determine which jobs to compile
@@ -520,7 +520,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
     // Allocate task contexts
     CompileTaskCtx* contexts = (CompileTaskCtx*)calloc((size_t)compile_count, sizeof(CompileTaskCtx));
     if (!contexts) {
-        cdo_error("Failed to allocate compile task contexts");
+        cdo_log_error("Failed to allocate compile task contexts");
         free(miss_indices);
         free(cache_keys);
         free(key_valid);
@@ -561,11 +561,11 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         if (threads <= 0) threads = 4; // fallback
     }
 
-    cdo_debug("Compiling %d file(s) with %d thread(s)", compile_count, threads);
+    cdo_log_debug("Compiling %d file(s) with %d thread(s)", compile_count, threads);
 
     ThreadPool* pool = threadpool_create(threads);
     if (!pool) {
-        cdo_error("Failed to create thread pool for compilation");
+        cdo_log_error("Failed to create thread pool for compilation");
         free(contexts);
         free(miss_indices);
         free(cache_keys);
@@ -578,7 +578,7 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         int rc = threadpool_submit(pool, compile_task, &contexts[i]);
         if (rc != 0) {
             int job_idx = use_cache ? miss_indices[i] : i;
-            cdo_error("Failed to submit compile job for: %s", jobs[job_idx].source_path);
+            cdo_log_error("Failed to submit compile job for: %s", jobs[job_idx].source_path);
             contexts[i].result = -1;
         }
     }
@@ -593,14 +593,14 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
         if (contexts[i].result != 0) {
             failures++;
         } else if (use_cache && key_valid[i]) {
-            // Compilation succeeded and we have a valid cache key — store the .o in cache
+            // Compilation succeeded and we have a valid cache key â€” store the .o in cache
             int job_idx = miss_indices[i];
             int store_rc = cache_store(cache_config, cache_keys[i], jobs[job_idx].object_path);
             if (store_rc == 0) {
                 cache_stats->stored++;
-                cdo_trace("Cache stored: %s", jobs[job_idx].source_path);
+                cdo_log_trace("Cache stored: %s", jobs[job_idx].source_path);
             } else {
-                cdo_warn("Cache store failed for: %s (non-fatal)", jobs[job_idx].source_path);
+                cdo_log_warn("Cache store failed for: %s (non-fatal)", jobs[job_idx].source_path);
             }
         }
     }
@@ -611,16 +611,16 @@ int compiler_compile_batch(const CompileJob* jobs, int job_count,
     free(key_valid);
 
     if (failures > 0) {
-        cdo_error("Compilation failed: %d of %d file(s) had errors", failures, compile_count);
+        cdo_log_error("Compilation failed: %d of %d file(s) had errors", failures, compile_count);
         return failures;
     }
 
-    cdo_info("Compiled %d file(s) successfully", compile_count);
+    cdo_log_info("Compiled %d file(s) successfully", compile_count);
     return 0;
 }
 
 // ---------------------------------------------------------------------------
-// Test wrappers — expose internal arg builders for property-based testing
+// Test wrappers â€” expose internal arg builders for property-based testing
 // ---------------------------------------------------------------------------
 
 int compiler_test_build_gcc_args(const CompileJob* job, const CompilerInfo* info,

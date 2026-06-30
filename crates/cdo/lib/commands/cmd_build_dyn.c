@@ -2,7 +2,7 @@
 #include "core/compiler.h"
 #include "model/scanner.h"
 #include "model/module.h"
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -41,14 +41,14 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
                                 const CacheConfig* cache_config,
                                 CacheStats* cache_stats,
                                 bool no_cache,
-                                ProgressBar* progress,
+                                CliProgressBar* progress,
                                 int* completed_units) {
     Module* dyn_mod = &crate->modules[MODULE_DYN];
     if (!dyn_mod->present) return 0; // Nothing to do
 
     // Req 4.4: dyn/ requires a lib/ module in the same crate
     if (!crate->has_lib) {
-        cdo_error("crate '%s': dyn/ module requires a lib/ module", crate->name);
+        cdo_log_error("crate '%s': dyn/ module requires a lib/ module", crate->name);
         return 1;
     }
 
@@ -56,7 +56,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
     FileList sources = {0};
     int rc = scanner_scan_module_sources(dyn_mod->dir_path, MODULE_DYN, NULL, 0, &sources);
     if (rc != 0) {
-        cdo_error("failed to scan dyn/ sources for crate '%s'", crate->name);
+        cdo_log_error("failed to scan dyn/ sources for crate '%s'", crate->name);
         return 1;
     }
 
@@ -71,7 +71,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
     }
 
     if (compilable_count == 0) {
-        cdo_error("crate '%s': dyn/ module has no compilable source files (.c or .cpp)",
+        cdo_log_error("crate '%s': dyn/ module has no compilable source files (.c or .cpp)",
                   crate->name);
         filelist_free(&sources);
         return 1;
@@ -88,7 +88,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
                                                 dyn_artifact_path, sizeof(dyn_artifact_path),
                                                 dyn_obj_dir, sizeof(dyn_obj_dir));
     if (apath_rc != 0) {
-        cdo_error("failed to compute artifact path for dyn/ module in crate '%s'",
+        cdo_log_error("failed to compute artifact path for dyn/ module in crate '%s'",
                   crate->name);
         filelist_free(&sources);
         return 1;
@@ -99,7 +99,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
     int inc_count = 0;
     rc = module_include_paths(crate, MODULE_DYN, ws, &inc_paths, &inc_count);
     if (rc != 0) {
-        cdo_error("failed to compute include paths for dyn/ module in crate '%s'",
+        cdo_log_error("failed to compute include paths for dyn/ module in crate '%s'",
                   crate->name);
         filelist_free(&sources);
         return 1;
@@ -190,7 +190,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
 
     // --- Compile dirty sources ---
     if (dirty_count > 0) {
-        cdo_info("Compiling dyn/ module for crate '%s' (%d files)", crate->name, dirty_count);
+        cdo_log_info("Compiling dyn/ module for crate '%s' (%d files)", crate->name, dirty_count);
 
         // Merge crate-level defines with profile defines
         int merged_define_count = build_prof->define_count + crate->define_count;
@@ -213,7 +213,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
         CompileJob* compile_jobs = (CompileJob*)calloc(dirty_count, sizeof(CompileJob));
         char** obj_paths = (char**)calloc(dirty_count, sizeof(char*));
         if (!compile_jobs || !obj_paths) {
-            cdo_error("out of memory allocating compile jobs for dyn/ module");
+            cdo_log_error("out of memory allocating compile jobs for dyn/ module");
             free(compile_jobs);
             free(obj_paths);
             free(merged_defines);
@@ -232,7 +232,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
 
             obj_paths[d] = (char*)malloc(260);
             if (!obj_paths[d]) {
-                cdo_error("out of memory");
+                cdo_log_error("out of memory");
                 for (int x = 0; x < d; x++) free(obj_paths[x]);
                 free(obj_paths);
                 free(compile_jobs);
@@ -293,7 +293,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
         free(merged_defines);
 
         if (rc != 0) {
-            cdo_error("compilation failed for dyn/ module in crate '%s'", crate->name);
+            cdo_log_error("compilation failed for dyn/ module in crate '%s'", crate->name);
             free(dirty_indices);
             free(compilable_indices);
             free(all_includes);
@@ -303,13 +303,13 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
             return 1;
         }
     } else {
-        cdo_info("crate '%s' dyn/ module is up to date", crate->name);
+        cdo_log_info("crate '%s' dyn/ module is up to date", crate->name);
     }
 
     // Update progress
     if (progress && completed_units) {
         *completed_units += compilable_count;
-        progress_update(progress, *completed_units);
+        cli_out_progress_update(progress, *completed_units);
     }
 
     // --- Link object files into shared library ---
@@ -317,7 +317,7 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
     const char** link_obj_paths = (const char**)malloc(compilable_count * sizeof(const char*));
     char** link_obj_bufs = (char**)calloc(compilable_count, sizeof(char*));
     if (!link_obj_paths || !link_obj_bufs) {
-        cdo_error("out of memory for link step");
+        cdo_log_error("out of memory for link step");
         free(link_obj_paths);
         free(link_obj_bufs);
         free(dirty_indices);
@@ -405,11 +405,11 @@ int build_shared_library_module(const Workspace* ws, Crate* crate,
         link_job.extra_flag_count = coverage_flag_count;
     }
 
-    cdo_info("Linking dyn/ module (shared library): %s", artifact_path);
+    cdo_log_info("Linking dyn/ module (shared library): %s", artifact_path);
     rc = compiler_link(&link_job, compiler);
 
     if (rc != 0) {
-        cdo_error("linking failed for dyn/ module in crate '%s'", crate->name);
+        cdo_log_error("linking failed for dyn/ module in crate '%s'", crate->name);
         for (int i = 0; i < compilable_count; i++) free(link_obj_bufs[i]);
         free(link_obj_bufs);
         free(link_obj_paths);

@@ -5,7 +5,6 @@
 // Requirements: 5.1, 5.2, 5.6, 5.9, 5.10, 5.11, 5.12, 5.13
 #include "cdo_ut.h"
 #include "core/shader.h"
-#include "core/cli.h"
 #include "pal/pal.h"
 
 #include <stdio.h>

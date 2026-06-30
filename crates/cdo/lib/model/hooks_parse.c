@@ -1,6 +1,6 @@
 #include "model/hooks.h"
 #include "commons/toml.h"
-#include "commons/output.h"
+#include "core/log.h"
 
 #include <string.h>
 
@@ -14,12 +14,14 @@ static const char* lifecycle_keys[HOOK_LIFECYCLE_COUNT] = {
     "post-build",
     "pre-test",
     "post-test",
+    "pre-e2e",
+    "post-e2e",
 };
 
 #define HOOK_DEFAULT_TIMEOUT 120
 
 // =============================================================================
-// hooks_parse_table — parse hooks from an already-parsed TomlTable
+// hooks_parse_table â€” parse hooks from an already-parsed TomlTable
 // =============================================================================
 
 int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
@@ -34,7 +36,7 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
         out->hooks[i].command[0] = '\0';
     }
 
-    if (!hooks_table) return 0; // No hooks section → all absent, success
+    if (!hooks_table) return 0; // No hooks section â†’ all absent, success
 
     // Iterate entries in the hooks table
     TomlEntry* entry = hooks_table->head;
@@ -49,7 +51,7 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
         }
 
         if (lifecycle_idx < 0) {
-            cdo_warn("Unknown hook lifecycle key: '%s' (expected pre-build, post-build, pre-test, post-test)", entry->key);
+            cdo_log_warn("Unknown hook lifecycle key: '%s' (expected pre-build, post-build, pre-test, post-test, pre-e2e, post-e2e)", entry->key);
             entry = entry->next;
             continue;
         }
@@ -65,13 +67,13 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
         if (val->type == TOML_STRING) {
             // String shorthand: pre-build = "command"
             if (!val->as.string || val->as.string[0] == '\0') {
-                // Empty string → treat as absent
+                // Empty string â†’ treat as absent
                 entry = entry->next;
                 continue;
             }
             size_t cmd_len = strlen(val->as.string);
             if (cmd_len >= sizeof(hook->command)) {
-                cdo_error("Hook command too long for '%s' (max %d chars)", entry->key, (int)(sizeof(hook->command) - 1));
+                cdo_log_error("Hook command too long for '%s' (max %d chars)", entry->key, (int)(sizeof(hook->command) - 1));
                 return -1;
             }
             memcpy(hook->command, val->as.string, cmd_len + 1);
@@ -82,7 +84,7 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
             // Table form: pre-build = { command = "...", timeout = N }
             TomlTable* tbl = val->as.table;
             if (!tbl) {
-                cdo_error("Invalid hook table for '%s'", entry->key);
+                cdo_log_error("Invalid hook table for '%s'", entry->key);
                 return -1;
             }
 
@@ -92,12 +94,12 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
             while (tbl_entry) {
                 if (strcmp(tbl_entry->key, "command") == 0) {
                     if (!tbl_entry->value || tbl_entry->value->type != TOML_STRING || !tbl_entry->value->as.string) {
-                        cdo_error("Hook '%s': 'command' must be a string", entry->key);
+                        cdo_log_error("Hook '%s': 'command' must be a string", entry->key);
                         return -1;
                     }
                     size_t cmd_len = strlen(tbl_entry->value->as.string);
                     if (cmd_len >= sizeof(hook->command)) {
-                        cdo_error("Hook command too long for '%s' (max %d chars)", entry->key, (int)(sizeof(hook->command) - 1));
+                        cdo_log_error("Hook command too long for '%s' (max %d chars)", entry->key, (int)(sizeof(hook->command) - 1));
                         return -1;
                     }
                     memcpy(hook->command, tbl_entry->value->as.string, cmd_len + 1);
@@ -105,7 +107,7 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
 
                 } else if (strcmp(tbl_entry->key, "timeout") == 0) {
                     if (!tbl_entry->value || tbl_entry->value->type != TOML_INTEGER) {
-                        cdo_error("Hook '%s': 'timeout' must be an integer", entry->key);
+                        cdo_log_error("Hook '%s': 'timeout' must be an integer", entry->key);
                         return -1;
                     }
                     hook->timeout_sec = (int)tbl_entry->value->as.integer;
@@ -114,12 +116,12 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
             }
 
             if (!found_command) {
-                cdo_error("Hook '%s': table form requires a 'command' key", entry->key);
+                cdo_log_error("Hook '%s': table form requires a 'command' key", entry->key);
                 return -1;
             }
 
             if (hook->command[0] == '\0') {
-                // Empty command string → treat as absent
+                // Empty command string â†’ treat as absent
                 entry = entry->next;
                 continue;
             }
@@ -128,7 +130,7 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
             hook->present = true;
 
         } else {
-            cdo_error("Hook '%s': invalid type (expected string or table, got type %d)", entry->key, (int)val->type);
+            cdo_log_error("Hook '%s': invalid type (expected string or table, got type %d)", entry->key, (int)val->type);
             return -1;
         }
 
@@ -139,7 +141,7 @@ int hooks_parse_table(const TomlTable* hooks_table, HookSet* out) {
 }
 
 // =============================================================================
-// hooks_parse — parse hooks from raw TOML text containing a [hooks] section
+// hooks_parse â€” parse hooks from raw TOML text containing a [hooks] section
 // =============================================================================
 
 int hooks_parse(const char* toml_content, HookSet* out) {
@@ -153,26 +155,26 @@ int hooks_parse(const char* toml_content, HookSet* out) {
         out->hooks[i].present = false;
     }
 
-    if (!toml_content || toml_content[0] == '\0') return 0; // No content → no hooks
+    if (!toml_content || toml_content[0] == '\0') return 0; // No content â†’ no hooks
 
     // Parse the TOML text
     TomlTable* root = NULL;
     TomlError err;
     if (toml_parse(toml_content, strlen(toml_content), &root, &err) != 0) {
-        cdo_error("Failed to parse TOML for hooks: line %d, col %d: %s", err.line, err.col, err.message);
+        cdo_log_error("Failed to parse TOML for hooks: line %d, col %d: %s", err.line, err.col, err.message);
         return -1;
     }
 
     // Look up the "hooks" key in the root table
     const TomlValue* hooks_val = toml_get(root, "hooks");
     if (!hooks_val) {
-        // No [hooks] section → all absent, success
+        // No [hooks] section â†’ all absent, success
         toml_free(root);
         return 0;
     }
 
     if (hooks_val->type != TOML_TABLE && hooks_val->type != TOML_INLINE_TABLE) {
-        cdo_error("[hooks] must be a table");
+        cdo_log_error("[hooks] must be a table");
         toml_free(root);
         return -1;
     }

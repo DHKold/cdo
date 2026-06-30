@@ -52,7 +52,6 @@ int pal_file_write(const char* path, const char* buf, size_t len);
 // --- System Info ---
 int pal_cpu_count(void);
 int pal_get_home_dir(char* buf, size_t buf_size);
-int pal_is_tty(int fd);
 
 /// Returns current monotonic time in milliseconds.
 uint64_t pal_time_ms(void);

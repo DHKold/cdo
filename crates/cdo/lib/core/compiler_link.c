@@ -1,17 +1,17 @@
-// compiler_link.c — Linking logic (static/shared/executable)
+// compiler_link.c â€” Linking logic (static/shared/executable)
 // Extracted from compiler.c as part of the source restructure.
 
 #include "compiler_internal.h"
 #include "core/compiler.h"
 #include "pal/pal.h"
-#include "core/output.h"
+#include "core/log.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 // ---------------------------------------------------------------------------
-// compiler_link — link object files into final artifact
+// compiler_link â€” link object files into final artifact
 // ---------------------------------------------------------------------------
 
 // Maximum number of arguments for the linker command
@@ -81,20 +81,20 @@ static int link_static_gcc(const LinkJob* job) {
     PalSpawnResult result;
     memset(&result, 0, sizeof(result));
 
-    cdo_debug("Archiving: ar rcs %s (%d objects)", job->output_path, job->object_count);
+    cdo_log_debug("Archiving: ar rcs %s (%d objects)", job->output_path, job->object_count);
 
     int rc = pal_spawn(&opts, &result);
     if (rc != PAL_OK) {
-        cdo_error("Failed to spawn archiver (ar)");
+        cdo_log_error("Failed to spawn archiver (ar)");
         pal_spawn_result_free(&result);
         return -1;
     }
 
     if (result.exit_code != 0) {
         if (result.stderr_buf && result.stderr_buf[0] != '\0') {
-            cdo_error("%s", result.stderr_buf);
+            cdo_log_error("%s", result.stderr_buf);
         }
-        cdo_error("Archiving failed (exit code %d)", result.exit_code);
+        cdo_log_error("Archiving failed (exit code %d)", result.exit_code);
         pal_spawn_result_free(&result);
         return result.exit_code;
     }
@@ -132,20 +132,20 @@ static int link_static_msvc(const LinkJob* job, const CompilerInfo* info) {
     PalSpawnResult result;
     memset(&result, 0, sizeof(result));
 
-    cdo_debug("Archiving: lib.exe /OUT:%s (%d objects)", job->output_path, job->object_count);
+    cdo_log_debug("Archiving: lib.exe /OUT:%s (%d objects)", job->output_path, job->object_count);
 
     int rc = pal_spawn(&opts, &result);
     if (rc != PAL_OK) {
-        cdo_error("Failed to spawn archiver (lib.exe)");
+        cdo_log_error("Failed to spawn archiver (lib.exe)");
         pal_spawn_result_free(&result);
         return -1;
     }
 
     if (result.exit_code != 0) {
         if (result.stderr_buf && result.stderr_buf[0] != '\0') {
-            cdo_error("%s", result.stderr_buf);
+            cdo_log_error("%s", result.stderr_buf);
         }
-        cdo_error("Archiving failed (exit code %d)", result.exit_code);
+        cdo_log_error("Archiving failed (exit code %d)", result.exit_code);
         pal_spawn_result_free(&result);
         return result.exit_code;
     }
@@ -212,23 +212,23 @@ static int link_gcc_clang(const LinkJob* job, const CompilerInfo* info, LinkMode
     memset(&result, 0, sizeof(result));
 
     const char* mode_str = (mode == LINK_MODE_SHARED_LIB) ? "shared library" : "executable";
-    cdo_debug("Linking %s: %s (%d objects)", mode_str, job->output_path, job->object_count);
+    cdo_log_debug("Linking %s: %s (%d objects)", mode_str, job->output_path, job->object_count);
 
     int rc = pal_spawn(&opts, &result);
     if (rc != PAL_OK) {
-        cdo_error("Failed to spawn linker (%s)", info->path);
+        cdo_log_error("Failed to spawn linker (%s)", info->path);
         pal_spawn_result_free(&result);
         return -1;
     }
 
     if (result.exit_code != 0) {
         if (result.stderr_buf && result.stderr_buf[0] != '\0') {
-            cdo_error("%s", result.stderr_buf);
+            cdo_log_error("%s", result.stderr_buf);
         }
         if (result.stdout_buf && result.stdout_buf[0] != '\0') {
-            cdo_error("%s", result.stdout_buf);
+            cdo_log_error("%s", result.stdout_buf);
         }
-        cdo_error("Linking failed: %s (exit code %d)", job->output_path, result.exit_code);
+        cdo_log_error("Linking failed: %s (exit code %d)", job->output_path, result.exit_code);
         pal_spawn_result_free(&result);
         return result.exit_code;
     }
@@ -306,23 +306,23 @@ static int link_msvc(const LinkJob* job, const CompilerInfo* info, LinkMode mode
     memset(&result, 0, sizeof(result));
 
     const char* mode_str = (mode == LINK_MODE_SHARED_LIB) ? "shared library" : "executable";
-    cdo_debug("Linking %s: %s (%d objects)", mode_str, job->output_path, job->object_count);
+    cdo_log_debug("Linking %s: %s (%d objects)", mode_str, job->output_path, job->object_count);
 
     int rc = pal_spawn(&opts, &result);
     if (rc != PAL_OK) {
-        cdo_error("Failed to spawn linker (%s)", info->linker_path);
+        cdo_log_error("Failed to spawn linker (%s)", info->linker_path);
         pal_spawn_result_free(&result);
         return -1;
     }
 
     if (result.exit_code != 0) {
         if (result.stderr_buf && result.stderr_buf[0] != '\0') {
-            cdo_error("%s", result.stderr_buf);
+            cdo_log_error("%s", result.stderr_buf);
         }
         if (result.stdout_buf && result.stdout_buf[0] != '\0') {
-            cdo_error("%s", result.stdout_buf);
+            cdo_log_error("%s", result.stdout_buf);
         }
-        cdo_error("Linking failed: %s (exit code %d)", job->output_path, result.exit_code);
+        cdo_log_error("Linking failed: %s (exit code %d)", job->output_path, result.exit_code);
         pal_spawn_result_free(&result);
         return result.exit_code;
     }
@@ -335,23 +335,23 @@ static int link_msvc(const LinkJob* job, const CompilerInfo* info, LinkMode mode
 int compiler_link(const LinkJob* job, const CompilerInfo* info) {
     if (!job || !info) return -1;
     if (!job->output_path || job->object_count <= 0 || !job->object_paths) {
-        cdo_error("Invalid link job: missing output path or object files");
+        cdo_log_error("Invalid link job: missing output path or object files");
         return -1;
     }
     if (info->family == COMPILER_UNKNOWN) {
-        cdo_error("Cannot link: no compiler detected");
+        cdo_log_error("Cannot link: no compiler detected");
         return -1;
     }
 
     // Ensure the output directory exists
     if (ensure_output_dir(job->output_path) != 0) {
-        cdo_error("Failed to create output directory for: %s", job->output_path);
+        cdo_log_error("Failed to create output directory for: %s", job->output_path);
         return -1;
     }
 
     LinkMode mode = determine_link_mode(job);
 
-    cdo_trace("Link mode: %s, output: %s",
+    cdo_log_trace("Link mode: %s, output: %s",
               mode == LINK_MODE_STATIC_LIB ? "static-lib" :
               mode == LINK_MODE_SHARED_LIB ? "shared-lib" : "executable",
               job->output_path);
@@ -374,7 +374,7 @@ int compiler_link(const LinkJob* job, const CompilerInfo* info) {
     }
 
     if (rc == 0) {
-        cdo_info("Linked: %s", job->output_path);
+        cdo_log_info("Linked: %s", job->output_path);
     }
 
     return rc;

@@ -1,6 +1,6 @@
 #include "cmd_build_internal.h"
 
-#include "core/output.h"
+#include "core/log.h"
 #include "pal/pal.h"
 
 #include <stdio.h>
@@ -89,14 +89,14 @@ static const char* shd_relative_to(const char* base, const char* full) {
 // ---------------------------------------------------------------------------
 
 /// Build (compile) the Shader_Module for a crate using DXC.
-/// Performs incremental compilation of .hlsl → .dxil.
+/// Performs incremental compilation of .hlsl â†’ .dxil.
 ///
 /// Requirements: 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10
 int build_shader_module(const Workspace* ws, Crate* crate,
                         const char* profile,
                         const BuildProfile* build_prof,
                         bool force,
-                        ProgressBar* progress,
+                        CliProgressBar* progress,
                         int* completed_units) {
     (void)build_prof; // reserved for future DXC flags from profile
 
@@ -105,12 +105,12 @@ int build_shader_module(const Workspace* ws, Crate* crate,
     // Req 4.7: Check DXC exists at .cdo/tools/dxc/bin/dxc.exe
     char dxc_path[520];
     if (pal_path_join(dxc_path, sizeof(dxc_path), ws->root_path, ".cdo/tools/dxc/bin/dxc.exe") != 0) {
-        cdo_error("shd module: failed to compute DXC path");
+        cdo_log_error("shd module: failed to compute DXC path");
         return 1;
     }
 
     if (pal_path_exists(dxc_path) != 0) {
-        cdo_error("DXC not found at '%s'. Install with: cdo tool install dxc", dxc_path);
+        cdo_log_error("DXC not found at '%s'. Install with: cdo tool install dxc", dxc_path);
         return 1;
     }
 
@@ -129,17 +129,17 @@ int build_shader_module(const Workspace* ws, Crate* crate,
 
     char dest_dir[520];
     if (pal_path_join(dest_dir, sizeof(dest_dir), build_dir, "shd") != 0) {
-        cdo_error("shd module: failed to compute destination path for crate '%s'", crate->name);
+        cdo_log_error("shd module: failed to compute destination path for crate '%s'", crate->name);
         return 1;
     }
 
     // Check if source directory exists
     if (pal_path_exists(norm_src) != 0) {
         // Req 4.10: empty/missing shd/ -> zero compiled, zero skipped, return 0
-        cdo_info("shd module '%s': 0 compiled, 0 skipped", crate->name);
+        cdo_log_info("shd module '%s': 0 compiled, 0 skipped", crate->name);
         if (progress && completed_units) {
             *completed_units += 1;
-            progress_update(progress, *completed_units);
+            cli_out_progress_update(progress, *completed_units);
         }
         return 0;
     }
@@ -150,17 +150,17 @@ int build_shader_module(const Workspace* ws, Crate* crate,
 
     int rc = pal_dir_walk(norm_src, collect_hlsl_cb, &walk_ctx);
     if (rc != 0 || walk_ctx.error) {
-        cdo_error("shd module: failed to walk source directory '%s' for crate '%s'", norm_src, crate->name);
+        cdo_log_error("shd module: failed to walk source directory '%s' for crate '%s'", norm_src, crate->name);
         shd_pathlist_free(&hlsl_files);
         return 1;
     }
 
     // Req 4.10: If shd/ has zero .hlsl files, report and return success
     if (hlsl_files.count == 0) {
-        cdo_info("shd module '%s': 0 compiled, 0 skipped", crate->name);
+        cdo_log_info("shd module '%s': 0 compiled, 0 skipped", crate->name);
         if (progress && completed_units) {
             *completed_units += 1;
-            progress_update(progress, *completed_units);
+            cli_out_progress_update(progress, *completed_units);
         }
         shd_pathlist_free(&hlsl_files);
         return 0;
@@ -168,7 +168,7 @@ int build_shader_module(const Workspace* ws, Crate* crate,
 
     // Ensure destination directory exists
     if (pal_mkdir_p(dest_dir) != 0) {
-        cdo_error("shd module: failed to create output directory '%s' for crate '%s'", dest_dir, crate->name);
+        cdo_log_error("shd module: failed to create output directory '%s' for crate '%s'", dest_dir, crate->name);
         shd_pathlist_free(&hlsl_files);
         return 1;
     }
@@ -184,7 +184,7 @@ int build_shader_module(const Workspace* ws, Crate* crate,
         // Compute relative path from source dir
         const char* rel = shd_relative_to(norm_src, src_path);
         if (!rel || *rel == '\0') {
-            cdo_error("shd module: failed to compute relative path for '%s'", src_path);
+            cdo_log_error("shd module: failed to compute relative path for '%s'", src_path);
             errors++;
             continue;
         }
@@ -196,17 +196,17 @@ int build_shader_module(const Workspace* ws, Crate* crate,
 
         char output_path[520];
         if (pal_path_join(output_path, sizeof(output_path), dest_dir, output_rel) != 0) {
-            cdo_error("shd module: output path too long for '%s'", rel);
+            cdo_log_error("shd module: output path too long for '%s'", rel);
             errors++;
             continue;
         }
 
-        // Req 4.5: Incremental — skip if output mtime >= source mtime (unless force)
+        // Req 4.5: Incremental â€” skip if output mtime >= source mtime (unless force)
         if (!force) {
             uint64_t src_mtime = 0, out_mtime = 0;
             if (pal_file_mtime(src_path, &src_mtime) == 0 && pal_file_mtime(output_path, &out_mtime) == 0) {
                 if (out_mtime >= src_mtime) {
-                    cdo_debug("shd: up-to-date, skipping: %s", rel);
+                    cdo_log_debug("shd: up-to-date, skipping: %s", rel);
                     skipped++;
                     continue;
                 }
@@ -221,7 +221,7 @@ int build_shader_module(const Workspace* ws, Crate* crate,
         if (last_slash) {
             *last_slash = '\0';
             if (pal_mkdir_p(parent_dir) != 0) {
-                cdo_error("shd module: failed to create directory '%s' for crate '%s'", parent_dir, crate->name);
+                cdo_log_error("shd module: failed to create directory '%s' for crate '%s'", parent_dir, crate->name);
                 errors++;
                 continue;
             }
@@ -244,11 +244,11 @@ int build_shader_module(const Workspace* ws, Crate* crate,
         PalSpawnResult result;
         memset(&result, 0, sizeof(result));
 
-        cdo_debug("shd: DXC %s -> %s", src_path, output_path);
+        cdo_log_debug("shd: DXC %s -> %s", src_path, output_path);
 
         int spawn_rc = pal_spawn(&spawn_opts, &result);
         if (spawn_rc != PAL_OK) {
-            cdo_error("shd module: failed to spawn DXC for '%s'", rel);
+            cdo_log_error("shd module: failed to spawn DXC for '%s'", rel);
             pal_spawn_result_free(&result);
             errors++;
             continue;
@@ -257,12 +257,12 @@ int build_shader_module(const Workspace* ws, Crate* crate,
         // Req 4.8: On failure, log DXC stderr, continue remaining shaders
         if (result.exit_code != 0) {
             if (result.stderr_buf && result.stderr_buf[0] != '\0') {
-                cdo_error("DXC error [%s]: %s", rel, result.stderr_buf);
+                cdo_log_error("DXC error [%s]: %s", rel, result.stderr_buf);
             }
             if (result.stdout_buf && result.stdout_buf[0] != '\0') {
-                cdo_error("DXC output [%s]: %s", rel, result.stdout_buf);
+                cdo_log_error("DXC output [%s]: %s", rel, result.stdout_buf);
             }
-            cdo_error("shd module: shader compilation failed: %s (exit code %d)", rel, result.exit_code);
+            cdo_log_error("shd module: shader compilation failed: %s (exit code %d)", rel, result.exit_code);
             pal_spawn_result_free(&result);
             errors++;
             continue;
@@ -273,19 +273,19 @@ int build_shader_module(const Workspace* ws, Crate* crate,
     }
 
     // Req 4.9: Report compiled/skipped counts at info verbosity
-    cdo_info("shd module '%s': %d compiled, %d skipped", crate->name, compiled, skipped);
+    cdo_log_info("shd module '%s': %d compiled, %d skipped", crate->name, compiled, skipped);
 
     // Update progress
     if (progress && completed_units) {
         *completed_units += 1;
-        progress_update(progress, *completed_units);
+        cli_out_progress_update(progress, *completed_units);
     }
 
     shd_pathlist_free(&hlsl_files);
 
     // Req 4.8: Return non-zero if any shader failed
     if (errors > 0) {
-        cdo_error("shd module '%s': %d shader(s) failed", crate->name, errors);
+        cdo_log_error("shd module '%s': %d shader(s) failed", crate->name, errors);
         return 1;
     }
 
